@@ -14,8 +14,8 @@
 ### 1. Установка локально:
 ```bash
 # Клонируйте репозиторий
-git clone https://github.com/ваш_логин/telegram-finance-bot.git
-cd telegram-finance-bot
+git clone https://github.com/Dkosx/TgBot.git   
+cd telegram-bot
 
 # Установите зависимости
 pip install -r requirements.txt
