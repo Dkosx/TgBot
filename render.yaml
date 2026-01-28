@@ -1,0 +1,57 @@
+# render.yaml
+# Конфигурация для деплоя Telegram бота на Render
+# Документация: https://render.com/docs/yaml-spec
+
+services:
+  - type: web  # Тип сервиса: веб-приложение
+    name: telegram-expense-bot  # Название сервиса
+    runtime: python  # ОБЯЗАТЕЛЬНОЕ ПОЛЕ: среда выполнения
+    region: frankfurt  # Регион сервера (ближе к России)
+    plan: free  # Бесплатный тариф
+    
+    # Автоматический деплой при пуше в GitHub
+    autoDeploy: true
+    
+    # Путь для health check (должен вернуть 200 OK)
+    healthCheckPath: /healthz
+    
+    # Путь для хуков (если нужно)
+    # pullRequestPreviewsEnabled: true
+    
+    # Команды сборки
+    buildCommand: |
+      pip install --upgrade pip
+      pip install -r requirements.txt
+    
+    # Команда запуска
+    startCommand: |
+      python app.py
+    
+    # Переменные окружения
+    envVars:
+      # Токен бота Telegram - САМАЯ ВАЖНАЯ ПЕРЕМЕННАЯ!
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false  # Не синхронизировать между окружениями
+
+        
+      # Версия Python
+      - key: PYTHON_VERSION
+        value: 3.11.0
+      
+      # Порт приложения (Flask по умолчанию использует 10000 в app.py)
+      - key: PORT
+        value: 10000
+      
+      # URL базы данных (Render добавит автоматически)
+      - key: DATABASE_URL
+        fromDatabase:
+          name: expense-bot-db  # Должно совпадать с именем БД ниже
+          property: connectionString
+
+databases:
+  - name: expense-bot-db  # Имя БД для ссылки в переменных
+    plan: free  # Бесплатный план
+    region: frankfurt  # Регион (должен совпадать с сервисом)
+    # Дополнительные параметры
+    databaseName: expense_bot  # Имя базы данных
+    user: expense_user  # Пользователь БД

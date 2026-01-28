@@ -2,10 +2,17 @@
 __pycache__/
 *.py[cod]
 *.so
+*.pyc
+*.pyo
+*.pyd
 .Python
 env/
 venv/
 .venv/
+*.egg-info/
+dist/
+build/
+pip-wheel-metadata/
 
 # Environment
 .env
@@ -18,13 +25,36 @@ venv/
 *.db
 *.sqlite3
 expenses.db
+*.sqlite
+*.db-journal
 
 # IDE
 .vscode/
 .idea/
 *.swp
 *.swo
+*.sublime-*
+*.code-workspace
 
 # OS
 .DS_Store
 Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Logs
+*.log
+logs/
+
+# Project specific
+instance/
+.webassets-cache
+*.pkl
+*.pickle
+
+# Render
+render.yaml.local
+
+# Telegram session files (если будут)
+*.session
+*.session-journal
