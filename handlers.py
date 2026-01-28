@@ -1,11 +1,16 @@
 from telegram import Update
 from telegram.ext import ContextTypes, ConversationHandler
-from database import db
+from database_postgres import (
+    add_user,
+    add_expense,
+    get_categories_stats,
+    get_today_expenses,
+    get_month_expenses,
+    clear_user_expenses
+)
 from keyboards import *
 from utils import *
 from config import CATEGORIES
-
-# Удаляем ненужный импорт: import re
 
 # Состояния для ConversationHandler
 AMOUNT, CATEGORY, DESCRIPTION = range(3)
@@ -14,7 +19,9 @@ AMOUNT, CATEGORY, DESCRIPTION = range(3)
 async def start_command(update: Update, _context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /start"""
     user = update.effective_user
-    db.add_user(user.id, user.username, user.first_name, user.last_name)
+
+    # Используем новую функцию add_user
+    add_user(user.id, user.username, user.first_name, user.last_name)
 
     welcome_text = f"""
 👋 Привет, {user.first_name}!
@@ -138,8 +145,8 @@ async def process_description(update: Update, context: ContextTypes.DEFAULT_TYPE
     amount = context.user_data['amount']
     category = context.user_data['category']
 
-    # Сохраняем в базу данных
-    expense_id = db.add_expense(user_id, amount, category, description)
+    # Сохраняем в базу данных с помощью новой функции
+    expense_id = add_expense(user_id, amount, category, description)
 
     if expense_id:
         response = f"""
@@ -176,23 +183,26 @@ async def cancel(update: Update, _context: ContextTypes.DEFAULT_TYPE):
 async def show_stats(update: Update, _context: ContextTypes.DEFAULT_TYPE):
     """Показать статистику по категориям"""
     user_id = update.effective_user.id
-    expenses = db.get_total_by_category(user_id, days=30)
 
-    if not expenses:
+    # Используем новую функцию get_categories_stats
+    expenses_data = get_categories_stats(user_id, days=30)
+
+    if not expenses_data:
         await update.message.reply_text(
             "📊 За последние 30 дней расходов нет.",
             reply_markup=get_main_keyboard()
         )
         return
 
-    total = sum(amount for _, amount in expenses)
+    # Формат данных: [(категория, сумма, количество), ...]
+    total = sum(amount for _, amount, _ in expenses_data)
     stats_text = f"📊 *Статистика за 30 дней*\n\n"
 
-    for category, amount in expenses:
+    for category, amount, count in expenses_data:
         percentage = (amount / total) * 100 if total > 0 else 0
         bar_length = int(percentage / 5)  # 5% на один символ
         bar = "█" * bar_length + "░" * (20 - bar_length)
-        stats_text += f"{category}:\n"
+        stats_text += f"{category} ({count} записей):\n"
         stats_text += f"{bar} {percentage:.1f}%\n"
         stats_text += f"Сумма: {format_amount(amount)}\n\n"
 
@@ -208,7 +218,9 @@ async def show_stats(update: Update, _context: ContextTypes.DEFAULT_TYPE):
 async def show_today_expenses(update: Update, _context: ContextTypes.DEFAULT_TYPE):
     """Показать расходы за сегодня"""
     user_id = update.effective_user.id
-    expenses = db.get_today_expenses(user_id)
+
+    # Используем новую функцию get_today_expenses
+    expenses = get_today_expenses(user_id)
 
     if not expenses:
         await update.message.reply_text(
@@ -231,7 +243,9 @@ async def show_today_expenses(update: Update, _context: ContextTypes.DEFAULT_TYP
 async def show_month_expenses(update: Update, _context: ContextTypes.DEFAULT_TYPE):
     """Показать расходы за текущий месяц"""
     user_id = update.effective_user.id
-    expenses = db.get_month_expenses(user_id)
+
+    # Используем новую функцию get_month_expenses
+    expenses = get_month_expenses(user_id)
 
     if not expenses:
         await update.message.reply_text(
@@ -269,7 +283,9 @@ async def clear_expenses_confirm(update: Update, _context: ContextTypes.DEFAULT_
 
     if text == '✅ Да, удалить все':
         user_id = update.effective_user.id
-        deleted_count = db.clear_all_expenses(user_id)
+
+        # Используем новую функцию clear_user_expenses
+        deleted_count = clear_user_expenses(user_id)
 
         await update.message.reply_text(
             f"🗑️ Удалено {deleted_count} записей.",
@@ -308,4 +324,4 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Используйте кнопки или команды для навигации.",
             reply_markup=get_main_keyboard()
         )
-    return None  # ← ДОБАВИТЬ ЭТУ СТРОКУ для исправления "Missing return statement"
+    return None

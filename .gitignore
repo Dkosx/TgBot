@@ -1,16 +1,29 @@
 # Python
 __pycache__/
 *.py[cod]
-*.pyc
-venv/
+*.so
+.Python
 env/
+venv/
 .venv/
+
+# Environment
 .env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Database
 *.db
+*.sqlite3
+expenses.db
 
 # IDE
-.idea/
 .vscode/
+.idea/
+*.swp
+*.swo
 
 # OS
 .DS_Store
