@@ -32,13 +32,24 @@ logger = logging.getLogger(__name__)
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
 app = Flask(__name__)
 
-# Глобальная переменная для бота
-telegram_app: Optional[Application] = None
+
+# ========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
+def run_async(coro):
+    """Запуск асинхронной функции в отдельном event loop"""
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
 
 
 # ========== ИНИЦИАЛИЗАЦИЯ БОТА ==========
-def init_bot():
-    """Инициализация Telegram бота (ленивая инициализация)"""
+telegram_app: Optional[Application] = None  # Явно указываем тип
+
+
+def create_and_initialize_bot() -> bool:
+    """Создание и инициализация приложения бота"""
     global telegram_app
 
     if not TELEGRAM_TOKEN or TELEGRAM_TOKEN == "your_bot_token_here":
@@ -46,6 +57,7 @@ def init_bot():
         return False
 
     try:
+        # 1. Создаем приложение
         telegram_app = Application.builder().token(TELEGRAM_TOKEN).build()
 
         # ========== НАСТРОЙКА ОБРАБОТЧИКОВ ==========
@@ -78,10 +90,7 @@ def init_bot():
 
         # Обработчик команды /categories
         async def categories_command(update: Update, _context: CallbackContext) -> None:
-            """Обработчик команды /categories"""
-            categories_text = "📋 Доступные категории:\n" + "\n".join(
-                f"• {cat}" for cat in CATEGORIES
-            )
+            categories_text = "📋 Доступные категории:\n" + "\n".join(f"• {cat}" for cat in CATEGORIES)
             await update.message.reply_text(categories_text)
             logger.info(f"Categories requested by {update.effective_user.id}")
 
@@ -100,19 +109,17 @@ def init_bot():
             handle_message
         ))
 
+        # 2. ИНИЦИАЛИЗИРУЕМ приложение (это критически важно!)
+        run_async(telegram_app.initialize())
+
+        # 3. Настройка меню команд
+        commands_list = [BotCommand(cmd, desc) for cmd, desc in COMMANDS]
+        # Гарантируем, что telegram_app не None после инициализации
+        assert telegram_app is not None and telegram_app.bot is not None
+        run_async(telegram_app.bot.set_my_commands(commands_list))
+
         logger.info("✅ Telegram бот инициализирован успешно")
         logger.info(f"✅ Тип базы данных: {type(db).__name__}")
-
-        # Настройка меню команд бота (синхронно)
-        try:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            commands_list = [BotCommand(cmd, desc) for cmd, desc in COMMANDS]
-            loop.run_until_complete(telegram_app.bot.set_my_commands(commands_list))
-            loop.close()
-            logger.info("✅ Меню команд бота настроено")
-        except Exception as e:
-            logger.warning(f"⚠️ Не удалось настроить меню команд: {e}")
 
         return True
 
@@ -122,15 +129,20 @@ def init_bot():
         return False
 
 
+# Инициализируем бота при импорте
+if TELEGRAM_TOKEN and TELEGRAM_TOKEN != "your_bot_token_here":
+    create_and_initialize_bot()
+
+
 # ========== WEBHOOK РОУТЫ ==========
 @app.route('/webhook', methods=['POST'])
 def webhook_handler():
     """Обработчик вебхука от Telegram"""
     global telegram_app
 
-    # Ленивая инициализация при первом запросе
-    if telegram_app is None:
-        if not init_bot():
+    # Если бот не инициализирован, пытаемся инициализировать
+    if not telegram_app:
+        if not create_and_initialize_bot():
             return 'Bot initialization failed', 500
 
     if db is None:
@@ -143,29 +155,24 @@ def webhook_handler():
 
     try:
         data = json.loads(request.data.decode('utf-8'))
+        # Гарантируем, что telegram_app не None после проверки выше
+        if telegram_app is None:
+            logger.error("❌ telegram_app все еще None")
+            return 'Bot not initialized', 500
+
+        # Теперь PyCharm знает, что telegram_app не None
         update = Update.de_json(data, telegram_app.bot)
         logger.info(f"📨 Получено обновление: {update.update_id}")
 
-        # Создаем новую event loop для обработки
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
+        # Обрабатываем обновление
+        run_async(telegram_app.process_update(update))
+        logger.info(f"✅ Обработано обновление: {update.update_id}")
+        return 'OK', 200
 
-        try:
-            # Обрабатываем обновление
-            loop.run_until_complete(telegram_app.process_update(update))
-            logger.info(f"✅ Обработано обновление: {update.update_id}")
-            return 'OK', 200
-        except Exception as process_error:
-            logger.error(f"❌ Ошибка обработки обновления: {process_error}")
-            return 'Processing error', 500
-        finally:
-            loop.close()
-
-    except (json.JSONDecodeError, KeyError, ValueError) as parse_error:
-        logger.error(f"❌ Ошибка парсинга JSON: {parse_error}")
-        return 'Invalid JSON data', 400
     except Exception as webhook_error:
         logger.error(f"❌ Ошибка webhook: {webhook_error}")
+        # Пробуем переинициализировать при следующем запросе
+        telegram_app = None
         return 'Internal error', 500
 
 
@@ -174,8 +181,8 @@ def set_webhook_handler():
     """Установка вебхука для бота"""
     global telegram_app
 
-    if telegram_app is None:
-        if not init_bot():
+    if not telegram_app:
+        if not create_and_initialize_bot():
             return """
             <!DOCTYPE html>
             <html>
@@ -190,31 +197,37 @@ def set_webhook_handler():
     try:
         webhook_url = f"https://{request.host}/webhook"
 
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-
-        try:
-            result = loop.run_until_complete(
-                telegram_app.bot.set_webhook(
-                    url=webhook_url,
-                    drop_pending_updates=True
-                )
-            )
-
-            return f"""
+        # Гарантируем, что telegram_app не None после проверки выше
+        if telegram_app is None:
+            return """
             <!DOCTYPE html>
             <html>
-            <head><title>Webhook Set</title></head>
+            <head><title>Ошибка</title></head>
             <body style="font-family: Arial; padding: 20px;">
-                <h1>✅ Вебхук установлен</h1>
-                <p><strong>URL:</strong> {webhook_url}</p>
-                <p><strong>Результат:</strong> {result}</p>
-                <p><a href="/">На главную</a> | <a href="/get_webhook_info">Информация</a></p>
+                <h1>❌ Telegram бот не доступен</h1>
             </body>
             </html>
-            """
-        finally:
-            loop.close()
+            """, 500
+
+        result = run_async(
+            telegram_app.bot.set_webhook(
+                url=webhook_url,
+                drop_pending_updates=True
+            )
+        )
+
+        return f"""
+        <!DOCTYPE html>
+        <html>
+        <head><title>Webhook Set</title></head>
+        <body style="font-family: Arial; padding: 20px;">
+            <h1>✅ Вебхук установлен</h1>
+            <p><strong>URL:</strong> {webhook_url}</p>
+            <p><strong>Результат:</strong> {result}</p>
+            <p><a href="/">На главную</a></p>
+        </body>
+        </html>
+        """
 
     except Exception as set_webhook_error:
         return f"""
@@ -235,40 +248,36 @@ def get_webhook_info_handler():
     """Получение информации о вебхуке"""
     global telegram_app
 
-    if telegram_app is None:
-        if not init_bot():
-            return """
-            <!DOCTYPE html>
-            <html>
-            <head><title>Ошибка</title></head>
+    if not telegram_app:
+        return """
+        <!DOCTYPE html>
+        <html>
+        <head><title>Ошибка</title></head>
             <body style="font-family: Arial; padding: 20px;">
-                <h1>❌ Telegram бот не инициализирован</h1>
-                <p>Требуется TELEGRAM_BOT_TOKEN</p>
-            </body>
-            </html>
-            """, 500
+            <h1>❌ Telegram бот не инициализирован</h1>
+        </body>
+        </html>
+        """, 500
 
     try:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-
-        try:
-            info = loop.run_until_complete(telegram_app.bot.get_webhook_info())
+        # Гарантируем, что telegram_app не None после проверки выше
+        if telegram_app is None:
+            info_json = "Бот не доступен"
+        else:
+            info = run_async(telegram_app.bot.get_webhook_info())
             info_json = json.dumps(info.to_dict(), indent=2, ensure_ascii=False)
 
-            return f"""
-            <!DOCTYPE html>
-            <html>
-            <head><title>Webhook Info</title></head>
-            <body style="font-family: Arial; padding: 20px;">
-                <h1>📊 Информация о вебхуке</h1>
-                <pre>{info_json}</pre>
-                <p><a href="/">На главную</a> | <a href="/set_webhook">Установить</a></p>
-            </body>
-            </html>
-            """
-        finally:
-            loop.close()
+        return f"""
+        <!DOCTYPE html>
+        <html>
+        <head><title>Webhook Info</title></head>
+        <body style="font-family: Arial; padding: 20px;">
+            <h1>📊 Информация о вебхуке</h1>
+            <pre>{info_json}</pre>
+            <p><a href="/">На главную</a></p>
+        </body>
+        </html>
+        """
 
     except Exception as get_webhook_error:
         return f"""
@@ -284,146 +293,33 @@ def get_webhook_info_handler():
         """, 500
 
 
-@app.route('/database_info', methods=['GET'])
-def database_info_handler():
-    """Информация о базе данных"""
-    if db is None:
-        return """
-        <!DOCTYPE html>
-        <html>
-        <head><title>Ошибка</title></head>
-        <body style="font-family: Arial; padding: 20px;">
-            <h1>❌ База данных не инициализирована</h1>
-            <p><a href="/">На главную</a></p>
-        </body>
-        </html>
-        """, 500
-
-    try:
-        if hasattr(db, 'get_database_info'):
-            info = db.get_database_info()
-        else:
-            info = {
-                "type": type(db).__name__,
-                "status": "connected" if hasattr(db, 'conn') and db.conn else "unknown"
-            }
-
-        info_json = json.dumps(info, indent=2, ensure_ascii=False, default=str)
-
-        return f"""
-        <!DOCTYPE html>
-        <html>
-        <head><title>Database Info</title></head>
-        <body style="font-family: Arial; padding: 20px;">
-            <h1>🗃️ Информация о базе данных</h1>
-            <p><strong>Тип базы:</strong> {type(db).__name__}</p>
-            <pre>{info_json}</pre>
-            <p><a href="/">На главную</a></p>
-        </body>
-        </html>
-        """
-    except Exception as db_error:
-        return f"""
-        <!DOCTYPE html>
-        <html>
-        <head><title>Ошибка</title></head>
-        <body style="font-family: Arial; padding: 20px;">
-            <h1>❌ Ошибка получения информации о БД</h1>
-            <pre>{str(db_error)}</pre>
-            <p><a href="/">На главную</a></p>
-        </body>
-        </html>
-        """, 500
-
-
-# ========== ГЛАВНАЯ СТРАНИЦА ==========
+# ========== ПРОСТЫЕ СТРАНИЦЫ ==========
 @app.route('/')
 def home_handler():
     """Главная страница"""
-    global telegram_app
-
     token_status = "✅ УСТАНОВЛЕН" if TELEGRAM_TOKEN and TELEGRAM_TOKEN != "your_bot_token_here" else "❌ ОТСУТСТВУЕТ"
 
-    bot_status = "✅ ИНИЦИАЛИЗИРОВАН" if telegram_app is not None else "🔄 НЕ ИНИЦИАЛИЗИРОВАН"
+    bot_status = "✅ ИНИЦИАЛИЗИРОВАН" if telegram_app else "❌ НЕ ИНИЦИАЛИЗИРОВАН"
 
     if db is None:
         db_status = "❌ НЕ ИНИЦИАЛИЗИРОВАНА"
-        database_type = "Неизвестно"
+        database_type_info = "Неизвестно"
     else:
-        database_type = type(db).__name__
-        if database_type == 'PostgreSQLDatabase':
-            db_status = "✅ PostgreSQL"
-        elif database_type == 'Database':
-            db_status = "💻 SQLite"
-        else:
-            db_status = f"✅ {database_type}"
+        database_type_info = type(db).__name__
+        db_status = "✅ PostgreSQL" if database_type_info == 'PostgreSQLDatabase' else "💻 SQLite"
 
     return f"""
     <!DOCTYPE html>
     <html>
-    <head>
-        <title>🤖 TgBot - Учет расходов</title>
-        <meta charset="utf-8">
-        <style>
-            body {{
-                font-family: Arial, sans-serif;
-                padding: 20px;
-                background: #f5f5f5;
-            }}
-            .container {{
-                max-width: 800px;
-                margin: 0 auto;
-                background: white;
-                padding: 30px;
-                border-radius: 10px;
-                box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-            }}
-            .status {{ 
-                padding: 10px; 
-                margin: 10px 0; 
-                border-radius: 5px;
-                font-weight: bold;
-            }}
-            .status-good {{ background: #d4edda; color: #155724; }}
-            .status-bad {{ background: #f8d7da; color: #721c24; }}
-            .status-info {{ background: #d1ecf1; color: #0c5460; }}
-            .btn {{
-                display: inline-block;
-                margin: 10px 5px;
-                padding: 10px 20px;
-                background: #007bff;
-                color: white;
-                text-decoration: none;
-                border-radius: 5px;
-            }}
-            .btn:hover {{ background: #0056b3; }}
-        </style>
-    </head>
-    <body>
-        <div class="container">
-            <h1>🤖 TgBot - Учет расходов</h1>
-
-            <div class="status {'status-good' if telegram_app is not None else 'status-info'}">
-                Telegram бот: {bot_status}
-            </div>
-
-            <div class="status {'status-good' if TELEGRAM_TOKEN and TELEGRAM_TOKEN != 'your_bot_token_here' else 'status-bad'}">
-                Токен бота: {token_status}
-            </div>
-
-            <div class="status status-info">
-                База данных: {db_status} ({database_type})
-            </div>
-
-            <div style="margin: 30px 0;">
-                <a href="/set_webhook" class="btn">🔗 Установить вебхук</a>
-                <a href="/get_webhook_info" class="btn">📊 Информация о вебхуке</a>
-                <a href="/database_info" class="btn">🗃️ Информация о БД</a>
-                <a href="/healthz" class="btn">🩺 Health Check</a>
-            </div>
-
-            <p>Примечание: Бот использует <strong>ленивую инициализацию</strong> - инициализируется при первом запросе.</p>
-        </div>
+    <head><title>🤖 TgBot</title></head>
+    <body style="font-family: Arial; padding: 20px;">
+        <h1>🤖 TgBot - Учет расходов</h1>
+        <p><strong>Telegram бот:</strong> {bot_status}</p>
+        <p><strong>Токен бота:</strong> {token_status}</p>
+        <p><strong>База данных:</strong> {db_status}</p>
+        <p><strong>Тип базы данных:</strong> {database_type_info}</p>
+        <p><a href="/set_webhook">🔗 Установить вебхук</a></p>
+        <p><a href="/healthz">🩺 Health Check</a></p>
     </body>
     </html>
     """
@@ -434,30 +330,14 @@ def health_check_handler():
     """Health check для Render"""
     return {
         "status": "healthy",
-        "service": "telegram-bot",
         "timestamp": time.time(),
-        "bot_initialized": telegram_app is not None,
+        "bot_initialized": bool(telegram_app),
         "database": type(db).__name__ if db else None,
-        "token_set": bool(TELEGRAM_TOKEN and TELEGRAM_TOKEN != "your_bot_token_here")
     }, 200
 
 
 # ========== ЗАПУСК ПРИЛОЖЕНИЯ ==========
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
-
-    print("=" * 60)
-    print("🚀 Запуск TgBot Webhook сервера")
-    print("=" * 60)
-    print(f"Порт: {port}")
-    print(f"Token: {'✅ Установлен' if TELEGRAM_TOKEN else '❌ Отсутствует'}")
-
-    if db is not None:
-        print(f"Database: ✅ {type(db).__name__}")
-    else:
-        print(f"Database: ❌ Не инициализирована")
-
-    print("Примечание: Telegram бот инициализируется при первом запросе")
-    print("=" * 60)
-
+    print(f"🚀 Запуск сервера на порту {port}")
     app.run(host='0.0.0.0', port=port, debug=False)
