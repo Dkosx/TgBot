@@ -3,7 +3,6 @@ import json
 import time
 import logging
 import asyncio
-import sys
 from typing import Optional
 from flask import Flask, request
 from telegram import Update, BotCommand
@@ -35,22 +34,30 @@ app = Flask(__name__)
 
 
 # ========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
-def run_async(coro):
-    """Запуск асинхронной функции в отдельном event loop"""
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
+def run_async_safe(coro):
+    """Безопасный запуск асинхронной функции"""
+    try:
+        # Проверяем, есть ли уже работающий event loop
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        # Если нет, создаем новый
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+    if loop.is_closed():
+        # Если loop закрыт, создаем новый
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
     try:
         return loop.run_until_complete(coro)
     finally:
-        loop.close()
+        # Не закрываем loop, чтобы его можно было использовать повторно
+        pass
 
 
-# ========== ИНИЦИАЛИЗАЦИЯ БОТА ==========
-telegram_app: Optional[Application] = None  # Явно указываем тип
-
-
-def create_and_initialize_bot() -> bool:
-    """Создание и инициализация приложения бота"""
+async def async_create_and_initialize_bot() -> bool:
+    """Асинхронное создание и инициализация приложения бота"""
     global telegram_app
 
     if not TELEGRAM_TOKEN or TELEGRAM_TOKEN == "your_bot_token_here":
@@ -120,14 +127,14 @@ def create_and_initialize_bot() -> bool:
 
         # 2. ИНИЦИАЛИЗИРУЕМ приложение (это критически важно!)
         logger.info("🔄 Инициализируем приложение бота...")
-        run_async(telegram_app.initialize())
+        await telegram_app.initialize()
         logger.info("✅ Приложение бота инициализировано")
 
         # 3. Настройка меню команд
         commands_list = [BotCommand(cmd, desc) for cmd, desc in COMMANDS]
         # Гарантируем, что telegram_app не None после инициализации
         if telegram_app is not None and telegram_app.bot is not None:
-            run_async(telegram_app.bot.set_my_commands(commands_list))
+            await telegram_app.bot.set_my_commands(commands_list)
             logger.info("✅ Меню команд настроено")
         else:
             logger.error("❌ telegram_app или telegram_app.bot равен None")
@@ -142,6 +149,15 @@ def create_and_initialize_bot() -> bool:
         logger.error(f"❌ Ошибка инициализации бота: {bot_init_error}", exc_info=True)
         telegram_app = None
         return False
+
+
+# ========== ИНИЦИАЛИЗАЦИЯ БОТА ==========
+telegram_app: Optional[Application] = None  # Явно указываем тип
+
+
+def create_and_initialize_bot() -> bool:
+    """Создание и инициализация приложения бота (синхронная обертка)"""
+    return run_async_safe(async_create_and_initialize_bot())
 
 
 # Инициализируем бота при импорте
@@ -160,8 +176,8 @@ def initialize_bot_on_startup():
         return False
 
 
-# Запускаем инициализацию при импорте модуля
-initialize_bot_on_startup()
+# Отложенная инициализация - НЕ инициализируем при импорте
+# Вместо этого инициализируем при первом запросе
 
 
 # ========== WEBHOOK МАРШРУТЫ ==========
@@ -201,7 +217,7 @@ def webhook_handler():
         logger.info(f"📨 Получено обновление: {update.update_id}")
 
         # Обрабатываем обновление
-        run_async(telegram_app.process_update(update))
+        run_async_safe(telegram_app.process_update(update))
         logger.info(f"✅ Обработано обновление: {update.update_id}")
         return 'OK', 200
 
@@ -251,7 +267,7 @@ def set_webhook_handler():
             </html>
             """, 500
 
-        result = run_async(
+        result = run_async_safe(
             telegram_app.bot.set_webhook(
                 url=webhook_url,
                 drop_pending_updates=True
@@ -310,7 +326,7 @@ def get_webhook_info_handler():
         if telegram_app is None:
             info_json = "Бот не доступен"
         else:
-            info = run_async(telegram_app.bot.get_webhook_info())
+            info = run_async_safe(telegram_app.bot.get_webhook_info())
             info_json = json.dumps(info.to_dict(), indent=2, ensure_ascii=False)
 
         return f"""
@@ -372,48 +388,7 @@ def home_handler():
         <p><a href="/set_webhook">🔗 Установить вебхук</a></p>
         <p><a href="/healthz">🩺 Health Check</a></p>
         <hr>
-        <h3>Отладка:</h3>
-        <p><a href="/debug">🔍 Подробная отладка</a></p>
         <p><small>Время: {time.strftime('%Y-%m-%d %H:%M:%S')}</small></p>
-    </body>
-    </html>
-    """
-
-
-@app.route('/debug')
-def debug_handler():
-    """Страница отладки"""
-
-    debug_info = {
-        "telegram_app_exists": telegram_app is not None,
-        "telegram_app_type": type(telegram_app).__name__ if telegram_app else "None",
-        "TELEGRAM_TOKEN_exists": TELEGRAM_TOKEN is not None,
-        "TELEGRAM_TOKEN_length": len(TELEGRAM_TOKEN) if TELEGRAM_TOKEN else 0,
-        "TELEGRAM_TOKEN_preview": TELEGRAM_TOKEN[:20] + "..." if TELEGRAM_TOKEN else "None",
-        "db_exists": db is not None,
-        "db_type": type(db).__name__ if db else "None",
-        "time": time.time(),
-        "python_version": sys.version,
-    }
-
-    # Убираем неиспользуемую переменную
-    forced_init_result = "Не выполнялась"
-
-    debug_html = "<h2>🔍 Отладочная информация</h2>"
-    for key, value in debug_info.items():
-        debug_html += f"<p><strong>{key}:</strong> {value}</p>"
-
-    debug_html += f"<p><strong>Принудительная инициализация:</strong> {forced_init_result}</p>"
-
-    return f"""
-    <!DOCTYPE html>
-    <html>
-    <head><title>🔍 Отладка TgBot</title></head>
-    <body style="font-family: Arial; padding: 20px;">
-        <h1>🔍 Отладка TgBot</h1>
-        {debug_html}
-        <p><a href="/">На главную</a></p>
-        <p><a href="/set_webhook">Попробовать установить вебхук</a></p>
     </body>
     </html>
     """
@@ -444,4 +419,6 @@ if __name__ == '__main__':
     print(f"💾 База данных: {'✅' if db else '❌'} {type(db).__name__ if db else 'Не инициализирована'}")
     print("=" * 50)
 
+    # Не инициализируем бота при запуске, а только при первом запросе
+    # Это помогает избежать ошибок с event loop
     app.run(host='0.0.0.0', port=port, debug=False)
