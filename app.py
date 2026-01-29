@@ -71,19 +71,8 @@ async def async_create_and_initialize_bot() -> bool:
 
         # ========== НАСТРОЙКА ОБРАБОТЧИКОВ ==========
         # ВАЖНО: Порядок добавления обработчиков имеет значение!
-        # Сначала добавляем все обычные обработчики
 
-        # Базовые обработчики команд (добавляем ПЕРВЫМИ)
-        telegram_app.add_handler(CommandHandler("start", start_command))
-        telegram_app.add_handler(CommandHandler("help", help_command))
-        telegram_app.add_handler(CommandHandler("stats", show_stats))
-        telegram_app.add_handler(CommandHandler("today", show_today_expenses))
-        telegram_app.add_handler(CommandHandler("month", show_month_expenses))
-        telegram_app.add_handler(CommandHandler("clear", clear_expenses_start))
-        telegram_app.add_handler(CommandHandler("categories", show_categories))  # ✅ Используем импортированную функцию
-        logger.info("✅ Базовые обработчики команд добавлены")
-
-        # ConversationHandler для добавления расхода
+        # ConversationHandler для добавления расхода (добавляем ПЕРВЫМ)
         conv_handler = ConversationHandler(
             entry_points=[
                 CommandHandler('add', add_expense_start),
@@ -108,25 +97,49 @@ async def async_create_and_initialize_bot() -> bool:
                 CommandHandler('cancel', cancel),
                 MessageHandler(filters.Text(['↩️ Назад', 'Отмена']), cancel)
             ],
-            # ВАЖНО: allow_reentry=True позволяет перезапускать ConversationHandler
+            name="add_expense",
+            persistent=True,
             allow_reentry=True
         )
 
         telegram_app.add_handler(conv_handler)
         logger.info("✅ ConversationHandler добавлен")
 
-        # Обработчик кнопок подтверждения очистки
-        telegram_app.add_handler(MessageHandler(
-            filters.Text(['✅ Да, удалить все', '❌ Нет, отмена']),
-            clear_expenses_confirm
-        ))
-        logger.info("✅ Обработчик кнопок очистки добавлен")
+        # Отдельный ConversationHandler для очистки
+        clear_conv_handler = ConversationHandler(
+            entry_points=[
+                CommandHandler('clear', clear_expenses_start),
+                MessageHandler(filters.Text(['🗑️ Очистить']), clear_expenses_start)
+            ],
+            states={
+                'CONFIRM': [
+                    MessageHandler(filters.Text(['✅ Да, удалить все', '❌ Нет, отмена']), clear_expenses_confirm)
+                ]
+            },
+            fallbacks=[
+                CommandHandler('cancel', cancel),
+                MessageHandler(filters.Text(['Отмена']), cancel)
+            ],
+            name="clear_expenses",
+            persistent=True,
+            allow_reentry=True
+        )
+
+        telegram_app.add_handler(clear_conv_handler)
+        logger.info("✅ Clear ConversationHandler добавлен")
+
+        # Базовые обработчики команд (добавляем ПОСЛЕ ConversationHandler)
+        telegram_app.add_handler(CommandHandler("start", start_command))
+        telegram_app.add_handler(CommandHandler("help", help_command))
+        telegram_app.add_handler(CommandHandler("stats", show_stats))
+        telegram_app.add_handler(CommandHandler("today", show_today_expenses))
+        telegram_app.add_handler(CommandHandler("month", show_month_expenses))
+        telegram_app.add_handler(CommandHandler("categories", show_categories))
+        logger.info("✅ Базовые обработчики команд добавлены")
 
         # Обработчик текстовых сообщений для кнопок - добавляем ПОСЛЕДНИМ
-        # Этот обработчик будет ловить все остальные текстовые сообщения
         telegram_app.add_handler(MessageHandler(
-            filters.TEXT & ~filters.COMMAND &
-            ~filters.Text(['✅ Да, удалить все', '❌ Нет, отмена']),
+            filters.TEXT & ~filters.COMMAND,
             handle_message
         ))
         logger.info("✅ Обработчик текстовых сообщений добавлен")
@@ -157,7 +170,7 @@ async def async_create_and_initialize_bot() -> bool:
 
 
 # ========== ИНИЦИАЛИЗАЦИЯ БОТА ==========
-telegram_app: Optional[Application] = None  # Явно указываем тип
+telegram_app: Optional[Application] = None
 
 
 def create_and_initialize_bot() -> bool:
@@ -165,7 +178,6 @@ def create_and_initialize_bot() -> bool:
     return run_async_safe(async_create_and_initialize_bot())
 
 
-# Инициализируем бота при импорте
 def initialize_bot_on_startup():
     """Инициализация бота при запуске приложения"""
     if TELEGRAM_TOKEN and TELEGRAM_TOKEN != "your_bot_token_here":
@@ -181,8 +193,10 @@ def initialize_bot_on_startup():
         return False
 
 
-# Отложенная инициализация
 initialize_bot_on_startup()
+
+
+# ... остальная часть app.py без изменений (webhook обработчики и Flask routes) ...
 
 
 # ========== WEBHOOK МАРШРУТЫ ==========
