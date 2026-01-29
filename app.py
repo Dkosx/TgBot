@@ -11,7 +11,7 @@ from config import COMMANDS
 
 # Импортируем обработчики из handlers.py
 from handlers import (
-    AMOUNT, CATEGORY, DESCRIPTION,
+    AMOUNT, CATEGORY, DESCRIPTION, CONFIRM_STATE,
     start_command, help_command,
     add_expense_start, process_amount, process_category, process_description,
     skip_description, cancel,
@@ -98,7 +98,8 @@ async def async_create_and_initialize_bot() -> bool:
                 MessageHandler(filters.Text(['↩️ Назад', 'Отмена']), cancel)
             ],
             name="add_expense",
-            persistent=True,
+            # Убираем persistent=True, так как не настроен persistence для приложения
+            persistent=False,
             allow_reentry=True
         )
 
@@ -112,7 +113,7 @@ async def async_create_and_initialize_bot() -> bool:
                 MessageHandler(filters.Text(['🗑️ Очистить']), clear_expenses_start)
             ],
             states={
-                'CONFIRM': [
+                CONFIRM_STATE: [  # Используем CONFIRM_STATE вместо 'CONFIRM'
                     MessageHandler(filters.Text(['✅ Да, удалить все', '❌ Нет, отмена']), clear_expenses_confirm)
                 ]
             },
@@ -121,7 +122,8 @@ async def async_create_and_initialize_bot() -> bool:
                 MessageHandler(filters.Text(['Отмена']), cancel)
             ],
             name="clear_expenses",
-            persistent=True,
+            # Убираем persistent=True, так как не настроен persistence для приложения
+            persistent=False,
             allow_reentry=True
         )
 
@@ -194,9 +196,6 @@ def initialize_bot_on_startup():
 
 
 initialize_bot_on_startup()
-
-
-# ... остальная часть app.py без изменений (webhook обработчики и Flask routes) ...
 
 
 # ========== WEBHOOK МАРШРУТЫ ==========
@@ -382,7 +381,7 @@ def home_handler():
 
     # Отображаем первую часть токена для отладки
     token_preview = TELEGRAM_TOKEN[
-                        :10] + "..." if TELEGRAM_TOKEN and TELEGRAM_TOKEN != "your_bot_token_here" else "Не установлен"
+                    :10] + "..." if TELEGRAM_TOKEN and TELEGRAM_TOKEN != "your_bot_token_here" else "Не установлен"
 
     bot_status = "✅ ИНИЦИАЛИЗИРОВАН" if telegram_app else "❌ НЕ ИНИЦИАЛИЗИРОВАН"
 
