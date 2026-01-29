@@ -6,17 +6,18 @@ import asyncio
 from typing import Optional
 from flask import Flask, request
 from telegram import Update, BotCommand
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackContext, ConversationHandler
-from config import CATEGORIES, COMMANDS
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ConversationHandler
+from config import COMMANDS
 
 # Импортируем обработчики из handlers.py
 from handlers import (
-    AMOUNT, CATEGORY, DESCRIPTION,  # ← состояния ConversationHandler
+    AMOUNT, CATEGORY, DESCRIPTION,
     start_command, help_command,
-    add_expense_start, process_amount, process_category,
-    process_description, cancel,
+    add_expense_start, process_amount, process_category, process_description,
+    skip_description, cancel,
     show_stats, show_today_expenses, show_month_expenses,
-    clear_expenses_start, clear_expenses_confirm, handle_message
+    clear_expenses_start, clear_expenses_confirm, handle_message,
+    show_categories
 )
 
 # Импортируем базу данных из database_postgres.py
@@ -38,22 +39,18 @@ app = Flask(__name__)
 def run_async_safe(coro):
     """Безопасный запуск асинхронной функции"""
     try:
-        # Проверяем, есть ли уже работающий event loop
         loop = asyncio.get_event_loop()
     except RuntimeError:
-        # Если нет, создаем новый
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
 
     if loop.is_closed():
-        # Если loop закрыт, создаем новый
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
 
     try:
         return loop.run_until_complete(coro)
     finally:
-        # Не закрываем loop, чтобы его можно было использовать повторно
         pass
 
 
@@ -73,6 +70,19 @@ async def async_create_and_initialize_bot() -> bool:
         logger.info("✅ Приложение бота создано")
 
         # ========== НАСТРОЙКА ОБРАБОТЧИКОВ ==========
+        # ВАЖНО: Порядок добавления обработчиков имеет значение!
+        # Сначала добавляем все обычные обработчики
+
+        # Базовые обработчики команд (добавляем ПЕРВЫМИ)
+        telegram_app.add_handler(CommandHandler("start", start_command))
+        telegram_app.add_handler(CommandHandler("help", help_command))
+        telegram_app.add_handler(CommandHandler("stats", show_stats))
+        telegram_app.add_handler(CommandHandler("today", show_today_expenses))
+        telegram_app.add_handler(CommandHandler("month", show_month_expenses))
+        telegram_app.add_handler(CommandHandler("clear", clear_expenses_start))
+        telegram_app.add_handler(CommandHandler("categories", show_categories))  # ✅ Используем импортированную функцию
+        logger.info("✅ Базовые обработчики команд добавлены")
+
         # ConversationHandler для добавления расхода
         conv_handler = ConversationHandler(
             entry_points=[
@@ -90,35 +100,20 @@ async def async_create_and_initialize_bot() -> bool:
                 ],
                 DESCRIPTION: [
                     MessageHandler(filters.TEXT & ~filters.COMMAND, process_description),
+                    CommandHandler('skip', skip_description),
                     CommandHandler('cancel', cancel)
                 ]
             },
             fallbacks=[
                 CommandHandler('cancel', cancel),
-                MessageHandler(filters.Text(['↩️ Назад', 'Отмена', 'cancel']), cancel)
-            ]
+                MessageHandler(filters.Text(['↩️ Назад', 'Отмена']), cancel)
+            ],
+            # ВАЖНО: allow_reentry=True позволяет перезапускать ConversationHandler
+            allow_reentry=True
         )
 
         telegram_app.add_handler(conv_handler)
         logger.info("✅ ConversationHandler добавлен")
-
-        # Базовые обработчики команд
-        telegram_app.add_handler(CommandHandler("start", start_command))
-        telegram_app.add_handler(CommandHandler("help", help_command))
-        telegram_app.add_handler(CommandHandler("stats", show_stats))
-        telegram_app.add_handler(CommandHandler("today", show_today_expenses))
-        telegram_app.add_handler(CommandHandler("month", show_month_expenses))
-        telegram_app.add_handler(CommandHandler("clear", clear_expenses_start))
-        logger.info("✅ Базовые обработчики команд добавлены")
-
-        # Обработчик команды /categories
-        async def categories_command(update: Update, _context: CallbackContext) -> None:
-            categories_text = "📋 Доступные категории:\n" + "\n".join(f"• {cat}" for cat in CATEGORIES)
-            await update.message.reply_text(categories_text)
-            logger.info(f"Categories requested by {update.effective_user.id}")
-
-        telegram_app.add_handler(CommandHandler("categories", categories_command))
-        logger.info("✅ Обработчик /categories добавлен")
 
         # Обработчик кнопок подтверждения очистки
         telegram_app.add_handler(MessageHandler(
@@ -127,7 +122,8 @@ async def async_create_and_initialize_bot() -> bool:
         ))
         logger.info("✅ Обработчик кнопок очистки добавлен")
 
-        # Обработчик текстовых сообщений
+        # Обработчик текстовых сообщений для кнопок - добавляем ПОСЛЕДНИМ
+        # Этот обработчик будет ловить все остальные текстовые сообщения
         telegram_app.add_handler(MessageHandler(
             filters.TEXT & ~filters.COMMAND &
             ~filters.Text(['✅ Да, удалить все', '❌ Нет, отмена']),
@@ -135,14 +131,13 @@ async def async_create_and_initialize_bot() -> bool:
         ))
         logger.info("✅ Обработчик текстовых сообщений добавлен")
 
-        # 2. ИНИЦИАЛИЗИРУЕМ приложение (это критически важно!)
+        # 2. ИНИЦИАЛИЗИРУЕМ приложение
         logger.info("🔄 Инициализируем приложение бота...")
         await telegram_app.initialize()
         logger.info("✅ Приложение бота инициализировано")
 
         # 3. Настройка меню команд
         commands_list = [BotCommand(cmd, desc) for cmd, desc in COMMANDS]
-        # Гарантируем, что telegram_app не None после инициализации
         if telegram_app is not None and telegram_app.bot is not None:
             await telegram_app.bot.set_my_commands(commands_list)
             logger.info("✅ Меню команд настроено")
@@ -186,7 +181,7 @@ def initialize_bot_on_startup():
         return False
 
 
-# Запускаем инициализацию при импорте модуля
+# Отложенная инициализация
 initialize_bot_on_startup()
 
 
@@ -372,7 +367,8 @@ def home_handler():
     token_status = "✅ УСТАНОВЛЕН" if TELEGRAM_TOKEN and TELEGRAM_TOKEN != "your_bot_token_here" else "❌ ОТСУТСТВУЕТ"
 
     # Отображаем первую часть токена для отладки
-    token_preview = TELEGRAM_TOKEN[:10] + "..." if TELEGRAM_TOKEN and TELEGRAM_TOKEN != "your_bot_token_here" else "Не установлен"
+    token_preview = TELEGRAM_TOKEN[
+                        :10] + "..." if TELEGRAM_TOKEN and TELEGRAM_TOKEN != "your_bot_token_here" else "Не установлен"
 
     bot_status = "✅ ИНИЦИАЛИЗИРОВАН" if telegram_app else "❌ НЕ ИНИЦИАЛИЗИРОВАН"
 

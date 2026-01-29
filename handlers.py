@@ -1,7 +1,7 @@
 import logging
 from datetime import datetime
 from telegram import Update, ReplyKeyboardMarkup
-from telegram.ext import ContextTypes, ConversationHandler
+from telegram.ext import ContextTypes, ConversationHandler, CallbackContext
 from database_postgres import db
 from config import CATEGORIES
 
@@ -274,6 +274,49 @@ async def process_description(update: Update, context: ContextTypes.DEFAULT_TYPE
     context.user_data.clear()
     return ConversationHandler.END
 
+async def skip_description(update: Update, context: CallbackContext):
+    """Пропуск описания"""
+    user_id = update.effective_user.id
+
+    amount = context.user_data.get('amount')
+    category = context.user_data.get('category')
+
+    if not amount or not category:
+        await update.message.reply_text(
+            "❌ Ошибка: данные потеряны. Начните заново.",
+            reply_markup=get_main_keyboard()
+        )
+        return ConversationHandler.END
+
+    # Сохраняем расход без описания
+    success = db.add_expense(
+        user_id=user_id,
+        amount=amount,
+        category=category,
+        description=None
+    )
+
+    if success:
+        response_text = (
+            f"✅ **Расход успешно добавлен!**\n\n"
+            f"💰 Сумма: {amount:.2f} руб.\n"
+            f"📂 Категория: {category}\n\n"
+            f"📊 Используйте /stats чтобы увидеть статистику."
+        )
+    else:
+        response_text = "❌ Не удалось сохранить расход. Попробуйте позже."
+
+    # Очищаем временные данные
+    context.user_data.clear()
+
+    await update.message.reply_text(
+        response_text,
+        reply_markup=get_main_keyboard(),
+        parse_mode='Markdown'
+    )
+
+    return ConversationHandler.END
+
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Отмена операции"""
@@ -453,3 +496,14 @@ async def handle_message(update: Update, _context: ContextTypes.DEFAULT_TYPE):
             "/help - для справки",
             reply_markup=get_main_keyboard()
         )
+# В handlers.py добавьте эту функцию:
+
+async def show_categories(update: Update, _context: CallbackContext):
+    """Показать список категорий"""
+    from config import CATEGORIES  # Импортируем здесь или добавьте в общие импорты
+    categories_text = "📋 **Доступные категории:**\n" + "\n".join(f"• {cat}" for cat in CATEGORIES)
+    await update.message.reply_text(
+        categories_text,
+        reply_markup=get_categories_keyboard(),
+        parse_mode='Markdown'
+    )
