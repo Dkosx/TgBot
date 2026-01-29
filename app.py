@@ -11,9 +11,10 @@ from config import CATEGORIES, COMMANDS
 
 # Импортируем обработчики из handlers.py
 from handlers import (
-    AMOUNT, CATEGORY, DESCRIPTION,
+    AMOUNT, CATEGORY, DESCRIPTION,  # ← состояния ConversationHandler
     start_command, help_command,
-    add_expense_start, process_amount, process_category, process_description, cancel,
+    add_expense_start, process_amount, process_category,
+    process_description, cancel,
     show_stats, show_today_expenses, show_month_expenses,
     clear_expenses_start, clear_expenses_confirm, handle_message
 )
@@ -79,9 +80,18 @@ async def async_create_and_initialize_bot() -> bool:
                 MessageHandler(filters.Text(['➕ Добавить расход']), add_expense_start)
             ],
             states={
-                AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, process_amount)],
-                CATEGORY: [MessageHandler(filters.TEXT & ~filters.COMMAND, process_category)],
-                DESCRIPTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, process_description)]
+                AMOUNT: [
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, process_amount),
+                    CommandHandler('cancel', cancel)
+                ],
+                CATEGORY: [
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, process_category),
+                    CommandHandler('cancel', cancel)
+                ],
+                DESCRIPTION: [
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, process_description),
+                    CommandHandler('cancel', cancel)
+                ]
             },
             fallbacks=[
                 CommandHandler('cancel', cancel),
@@ -176,8 +186,8 @@ def initialize_bot_on_startup():
         return False
 
 
-# Отложенная инициализация - НЕ инициализируем при импорте
-# Вместо этого инициализируем при первом запросе
+# Запускаем инициализацию при импорте модуля
+initialize_bot_on_startup()
 
 
 # ========== WEBHOOK МАРШРУТЫ ==========
@@ -362,8 +372,7 @@ def home_handler():
     token_status = "✅ УСТАНОВЛЕН" if TELEGRAM_TOKEN and TELEGRAM_TOKEN != "your_bot_token_here" else "❌ ОТСУТСТВУЕТ"
 
     # Отображаем первую часть токена для отладки
-    token_preview = TELEGRAM_TOKEN[
-                        :10] + "..." if TELEGRAM_TOKEN and TELEGRAM_TOKEN != "your_bot_token_here" else "Не установлен"
+    token_preview = TELEGRAM_TOKEN[:10] + "..." if TELEGRAM_TOKEN and TELEGRAM_TOKEN != "your_bot_token_here" else "Не установлен"
 
     bot_status = "✅ ИНИЦИАЛИЗИРОВАН" if telegram_app else "❌ НЕ ИНИЦИАЛИЗИРОВАН"
 
@@ -419,6 +428,4 @@ if __name__ == '__main__':
     print(f"💾 База данных: {'✅' if db else '❌'} {type(db).__name__ if db else 'Не инициализирована'}")
     print("=" * 50)
 
-    # Не инициализируем бота при запуске, а только при первом запросе
-    # Это помогает избежать ошибок с event loop
     app.run(host='0.0.0.0', port=port, debug=False)
