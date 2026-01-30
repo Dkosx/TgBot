@@ -107,6 +107,7 @@ async def async_create_and_initialize_bot() -> bool:
         logger.info("✅ ConversationHandler добавлен")
 
         # Отдельный ConversationHandler для очистки
+        # В функции async_create_and_initialize_bot() найти clear_conv_handler и обновить:
         clear_conv_handler = ConversationHandler(
             entry_points=[
                 CommandHandler('clear', clear_expenses_start),
@@ -122,7 +123,6 @@ async def async_create_and_initialize_bot() -> bool:
                 MessageHandler(filters.Text(['Отмена']), cancel)
             ],
             name="clear_expenses",
-            # Убираем persistent=True, так как не настроен persistence для приложения
             persistent=False,
             allow_reentry=True
         )
