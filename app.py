@@ -5,9 +5,11 @@ import logging
 import asyncio
 from typing import Optional
 from flask import Flask, request
-from telegram import Update, BotCommand
+from telegram import Update  # Убрали BotCommand
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ConversationHandler
-from config import COMMANDS
+
+# Убрали ненужный импорт COMMANDS, так как меню команд не создается
+# from config import COMMANDS
 
 # Импортируем обработчики из handlers.py
 from handlers import (
@@ -73,8 +75,9 @@ async def async_create_and_initialize_bot() -> bool:
         logger.info("✅ Приложение бота создано")
 
         # ========== НАСТРОЙКА ОБРАБОТЧИКОВ ==========
+        # ВАЖНО: Правильный порядок добавления обработчиков
 
-        # ConversationHandler для добавления расхода
+        # 1. Сначала ConversationHandler для добавления расхода
         conv_handler = ConversationHandler(
             entry_points=[CommandHandler('add', add_expense_start)],
             states={
@@ -99,34 +102,30 @@ async def async_create_and_initialize_bot() -> bool:
 
         telegram_app.add_handler(conv_handler)
 
-        # Базовые обработчики команд
+        # 2. Затем отдельные команды в правильном порядке
+        # (чем позже добавлен обработчик, тем выше его приоритет)
+        telegram_app.add_handler(CommandHandler("clear", clear_expenses_start))
         telegram_app.add_handler(CommandHandler("start", start_command))
         telegram_app.add_handler(CommandHandler("help", help_command))
         telegram_app.add_handler(CommandHandler("stats", show_stats))
         telegram_app.add_handler(CommandHandler("today", show_today_expenses))
         telegram_app.add_handler(CommandHandler("month", show_month_expenses))
         telegram_app.add_handler(CommandHandler("categories", show_categories))
-        telegram_app.add_handler(CommandHandler("clear", clear_expenses_start))
 
-        # Обработчик текстовых сообщений (для подтверждения очистки и случайных сообщений)
+        # 3. ВСЕГДА в самом конце - общий обработчик сообщений
+        # (должен быть добавлен последним)
         telegram_app.add_handler(MessageHandler(
             filters.TEXT & ~filters.COMMAND,
             handle_message
         ))
 
-        # 2. ИНИЦИАЛИЗИРУЕМ приложение
+        # 4. ИНИЦИАЛИЗИРУЕМ приложение
         logger.info("🔄 Инициализируем приложение бота...")
         await telegram_app.initialize()
         logger.info("✅ Приложение бота инициализировано")
 
-        # 3. Настройка меню команд
-        commands_list = [BotCommand(cmd, desc) for cmd, desc in COMMANDS]
-        if telegram_app is not None and telegram_app.bot is not None:
-            await telegram_app.bot.set_my_commands(commands_list)
-            logger.info("✅ Меню команд настроено")
-        else:
-            logger.error("❌ telegram_app или telegram_app.bot равен None")
-            return False
+        # 5. МЕНЮ КОМАНД НЕ НАСТРАИВАЕМ - чтобы не было кнопок
+        logger.info("ℹ️ Меню команд не настроено (используйте команды вручную)")
 
         logger.info("✅ Telegram бот инициализирован успешно")
         logger.info(f"✅ Тип базы данных: {type(db).__name__}")

@@ -114,6 +114,7 @@ async def add_expense_start(update: Update, context: CallbackContext) -> int:
 async def process_amount(update: Update, context: CallbackContext) -> int:
     """Обработка суммы"""
     text = update.message.text.strip()
+    logger.info(f"process_amount: получен текст '{text}'")
 
     try:
         amount = float(text.replace(',', '.'))
@@ -134,6 +135,7 @@ async def process_amount(update: Update, context: CallbackContext) -> int:
 
         # Сохраняем сумму
         context.user_data['amount'] = amount
+        logger.info(f"process_amount: сохранена сумма {amount}")
 
         # Показываем категории в виде простого списка
         categories_text = "📋 **Выберите категорию:**\n\n"
@@ -147,6 +149,7 @@ async def process_amount(update: Update, context: CallbackContext) -> int:
         return CATEGORY
 
     except ValueError:
+        logger.warning(f"process_amount: неверный формат числа '{text}'")
         await update.message.reply_text(
             "❌ Неверный формат. Введите число, например: 1500 или 1500.50\n"
             "Для отмены напишите /cancel"
@@ -157,18 +160,34 @@ async def process_amount(update: Update, context: CallbackContext) -> int:
 async def process_category(update: Update, context: CallbackContext) -> int:
     """Обработка выбора категории"""
     text = update.message.text.strip()
+    logger.info(f"process_category: получен текст '{text}'")
 
-    # Проверка на валидную категорию
+    # Добавляем логирование для отладки
+    logger.info(f"process_category: доступные категории: {CATEGORIES}")
+
+    # Проблема может быть здесь: проверяем, что text является строкой
+    if not isinstance(text, str):
+        logger.error(f"process_category: text не строка: {type(text)} = {text}")
+        await update.message.reply_text(
+            "❌ Ошибка ввода. Попробуйте еще раз.",
+            parse_mode='Markdown'
+        )
+        return CATEGORY
+
+    # Проверка на валидную категорию - ИСПРАВЛЕНО: используем точное сравнение
     if text not in CATEGORIES:
+        logger.warning(f"process_category: категория '{text}' не найдена в списке")
         await update.message.reply_text(
             "❌ Пожалуйста, введите название категории из списка:\n\n" +
             "\n".join([f"• {cat}" for cat in CATEGORIES]) +
-            "\n\nДля отмены напишите /cancel"
+            "\n\nДля отмены напишите /cancel",
+            parse_mode='Markdown'
         )
         return CATEGORY
 
     # Сохраняем категорию
     context.user_data['category'] = text
+    logger.info(f"process_category: сохранена категория '{text}'")
 
     await update.message.reply_text(
         f"✅ Категория: {text}\n\n"
@@ -184,18 +203,24 @@ async def process_description(update: Update, context: CallbackContext) -> int:
     """Обработка описания"""
     text = update.message.text.strip()
     user_id = update.effective_user.id
+    logger.info(f"process_description: получен текст '{text}'")
 
     # Пропуск описания
     if text == '/skip':
         text = None
+        logger.info("process_description: описание пропущено")
 
     # Получаем сохраненные данные
     amount = context.user_data.get('amount')
     category = context.user_data.get('category')
 
+    logger.info(f"process_description: сумма={amount}, категория={category}")
+
     if not amount or not category:
+        logger.error("process_description: потеряны данные из context.user_data")
         await update.message.reply_text(
             "❌ Ошибка: данные потеряны. Начните заново командой /add",
+            parse_mode='Markdown'
         )
         context.user_data.clear()
         return ConversationHandler.END
@@ -216,10 +241,11 @@ async def process_description(update: Update, context: CallbackContext) -> int:
         )
         if text:
             response += f"📝 Описание: {text}\n"
-
         response += "\n💡 Используйте другие команды для управления расходами."
+        logger.info(f"process_description: расход успешно добавлен для пользователя {user_id}")
     else:
         response = "❌ Ошибка сохранения. Попробуйте позже."
+        logger.error(f"process_description: ошибка сохранения для пользователя {user_id}")
 
     # Очищаем данные
     context.user_data.clear()
@@ -233,10 +259,12 @@ async def process_description(update: Update, context: CallbackContext) -> int:
 
 async def cancel(update: Update, context: CallbackContext) -> int:
     """Отмена диалога - команда /cancel"""
+    logger.info(f"cancel: отмена диалога пользователем {update.effective_user.id}")
     context.user_data.clear()
     await update.message.reply_text(
         "🚫 Операция отменена.\n"
-        "Используйте /help для просмотра доступных команд."
+        "Используйте /help для просмотра доступных команд.",
+        parse_mode='Markdown'
     )
     return ConversationHandler.END
 
@@ -245,6 +273,7 @@ async def cancel(update: Update, context: CallbackContext) -> int:
 async def show_today_expenses(update: Update, _context: CallbackContext) -> int:
     """Расходы за сегодня - команда /today"""
     user_id = update.effective_user.id
+    logger.info(f"show_today_expenses: запрос от пользователя {user_id}")
     expenses = db.get_today_expenses(user_id)
 
     if not expenses:
@@ -278,6 +307,7 @@ async def show_today_expenses(update: Update, _context: CallbackContext) -> int:
 async def show_month_expenses(update: Update, _context: CallbackContext) -> int:
     """Расходы за месяц - команда /month"""
     user_id = update.effective_user.id
+    logger.info(f"show_month_expenses: запрос от пользователя {user_id}")
     expenses = db.get_month_expenses(user_id)
 
     if not expenses:
@@ -311,6 +341,7 @@ async def show_month_expenses(update: Update, _context: CallbackContext) -> int:
 async def show_stats(update: Update, _context: CallbackContext) -> int:
     """Статистика - команда /stats"""
     user_id = update.effective_user.id
+    logger.info(f"show_stats: запрос от пользователя {user_id}")
     stats = db.get_expenses_by_category(user_id)
     total = db.get_total_expenses(user_id)
 
@@ -340,6 +371,7 @@ async def show_stats(update: Update, _context: CallbackContext) -> int:
 async def clear_expenses_start(update: Update, context: CallbackContext) -> int:
     """Начало очистки - команда /clear"""
     user_id = update.effective_user.id
+    logger.info(f"clear_expenses_start: запрос от пользователя {user_id}")
     total = db.get_total_expenses(user_id)
 
     if total == 0:
@@ -365,9 +397,10 @@ async def clear_expenses_start(update: Update, context: CallbackContext) -> int:
 async def handle_clear_confirmation(update: Update, context: CallbackContext) -> int:
     """Обработка подтверждения очистки"""
     text = update.message.text.strip().upper()
+    user_id = update.effective_user.id
+    logger.info(f"handle_clear_confirmation: получен текст '{text}' от пользователя {user_id}")
 
     if text == 'ДА':
-        user_id = update.effective_user.id
         success = db.clear_user_expenses(user_id)
 
         if success:
@@ -379,11 +412,13 @@ async def handle_clear_confirmation(update: Update, context: CallbackContext) ->
         else:
             await update.message.reply_text(
                 "❌ Ошибка удаления расходов.",
+                parse_mode='Markdown'
             )
     else:
         await update.message.reply_text(
             "✅ Очистка отменена.\n"
             "Данные сохранены.",
+            parse_mode='Markdown'
         )
 
     # Очищаем флаг
@@ -397,6 +432,8 @@ async def handle_clear_confirmation(update: Update, context: CallbackContext) ->
 async def handle_message(update: Update, context: CallbackContext) -> int:
     """Обработка текстовых сообщений (для очистки и случайных сообщений)"""
     text = update.message.text.strip().upper()
+    user_id = update.effective_user.id
+    logger.info(f"handle_message: получен текст '{text}' от пользователя {user_id}")
 
     # Обработка подтверждения очистки
     if context.user_data.get('clearing') and text == 'ДА':
@@ -405,7 +442,8 @@ async def handle_message(update: Update, context: CallbackContext) -> int:
     # Если начат процесс очистки, но введено не "ДА"
     if context.user_data.get('clearing'):
         await update.message.reply_text(
-            "⚠️ Напишите **ДА** для подтверждения очистки или /cancel для отмены."
+            "⚠️ Напишите **ДА** для подтверждения очистки или /cancel для отмены.",
+            parse_mode='Markdown'
         )
         return ConversationHandler.END
 
@@ -419,6 +457,7 @@ async def handle_message(update: Update, context: CallbackContext) -> int:
         "/month - Расходы за месяц\n"
         "/stats - Статистика\n"
         "/categories - Список категорий\n"
-        "/clear - Очистить расходы"
+        "/clear - Очистить расходы",
+        parse_mode='Markdown'
     )
     return ConversationHandler.END
