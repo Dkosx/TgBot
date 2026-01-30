@@ -1,320 +1,315 @@
-import os
-import json
-import time
 import logging
-import asyncio
-from typing import Optional
-from flask import Flask, request
 from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ConversationHandler
-
-# Импортируем обработчики из handlers.py
-from handlers import (
-    AMOUNT, CATEGORY, DESCRIPTION,
-    start_command, help_command,
-    add_expense_start, process_amount, process_category, process_description,
-    cancel,
-    show_stats, show_today_expenses, show_month_expenses,
-    clear_expenses_start,
-    show_categories
-)
-
+from telegram.ext import CallbackContext, ConversationHandler
+from config import CATEGORIES
 from database_postgres import db
 
-# ========== НАСТРОЙКА ЛОГИРОВАНИЯ ==========
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
 logger = logging.getLogger(__name__)
-
-# ========== КОНФИГУРАЦИЯ ==========
-TELEGRAM_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
-app = Flask(__name__)
+AMOUNT, CATEGORY, DESCRIPTION = range(3)
 
 
-def run_async_safe(coro):
-    """Безопасный запуск асинхронной функции"""
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
+async def start_command(update: Update, context: CallbackContext) -> int:
+    """Обработчик команды /start"""
+    user = update.effective_user
+    context.user_data.clear()
+
+    db.add_user(user.id, user.username, user.first_name, user.last_name, user.language_code)
+
+    await update.message.reply_text(
+        f"👋 Привет, {user.first_name}!\n\n"
+        "🤖 Я бот для учёта расходов.\n\n"
+        "📌 **Команды:**\n"
+        "/add - Добавить расход\n"
+        "/today - Расходы за сегодня\n"
+        "/month - Расходы за месяц\n"
+        "/stats - Статистика\n"
+        "/categories - Категории\n"
+        "/clear - Очистить\n"
+        "/help - Помощь",
+        parse_mode='Markdown'
+    )
+    return ConversationHandler.END
+
+
+async def help_command(update: Update, context: CallbackContext) -> int:
+    """Команда помощи /help"""
+    context.user_data.clear()
+    await update.message.reply_text(
+        "📚 **Справка:**\n\n"
+        "/add - Добавить расход\n"
+        "/today - Расходы за сегодня\n"
+        "/month - Расходы за месяц\n"
+        "/stats - Статистика\n"
+        "/categories - Категории\n"
+        "/clear - Очистить\n"
+        "/cancel - Отмена",
+        parse_mode='Markdown'
+    )
+    return ConversationHandler.END
+
+
+async def show_categories(update: Update, context: CallbackContext) -> int:
+    """Показать все категории"""
+    context.user_data.clear()
+    categories = "\n".join([f"• {cat}" for cat in CATEGORIES])
+    await update.message.reply_text(
+        f"📋 **Категории:**\n\n{categories}",
+        parse_mode='Markdown'
+    )
+    return ConversationHandler.END
+
+
+# ========== ДИАЛОГ ДОБАВЛЕНИЯ РАСХОДА ==========
+async def add_expense_start(update: Update, context: CallbackContext) -> int:
+    """Начало добавления расхода"""
+    logger.info(f"🔄 Пользователь {update.effective_user.id} начал добавление расхода")
+    context.user_data.clear()
+
+    await update.message.reply_text(
+        "💸 **Введите сумму расхода:**\n"
+        "Например: 1500 или 1500.50\n\n"
+        "/cancel для отмены",
+        parse_mode='Markdown'
+    )
+    return AMOUNT
+
+
+async def process_amount(update: Update, context: CallbackContext) -> int:
+    """Обработка суммы"""
     try:
-        return loop.run_until_complete(coro)
-    except Exception as e:
-        logger.error(f"Ошибка в асинхронной функции: {e}")
-        return None
+        amount = float(update.message.text.replace(',', '.'))
+        logger.info(f"💰 Получена сумма: {amount}")
 
+        if amount <= 0:
+            await update.message.reply_text("❌ Сумма должна быть больше 0. Введите снова:")
+            return AMOUNT
 
-async def async_create_and_initialize_bot() -> bool:
-    """Асинхронное создание и инициализация приложения бота"""
-    global telegram_app
+        context.user_data['amount'] = amount
+        logger.info(f"✅ Сумма сохранена: {amount}")
 
-    if not TELEGRAM_TOKEN or TELEGRAM_TOKEN == "your_bot_token_here":
-        logger.warning("⚠️ TELEGRAM_BOT_TOKEN не установлен")
-        return False
+        categories = "\n".join([f"• {cat}" for cat in CATEGORIES])
 
-    try:
-        logger.info("🔄 Начинаем инициализацию бота...")
-
-        # 1. Создаем приложение с таймаутами
-        telegram_app = Application.builder().token(TELEGRAM_TOKEN).build()
-        logger.info("✅ Приложение бота создано")
-
-        # ========== ВАЖНО: Сначала ConversationHandler ==========
-
-        # ConversationHandler для добавления расхода
-        conv_handler = ConversationHandler(
-            entry_points=[CommandHandler('add', add_expense_start)],
-            states={
-                AMOUNT: [
-                    MessageHandler(
-                        filters.TEXT & ~filters.COMMAND,
-                        process_amount
-                    )
-                ],
-                CATEGORY: [
-                    MessageHandler(
-                        filters.TEXT & ~filters.COMMAND,
-                        process_category
-                    )
-                ],
-                DESCRIPTION: [
-                    MessageHandler(
-                        filters.TEXT & ~filters.COMMAND,
-                        process_description
-                    ),
-                    CommandHandler('skip', process_description)
-                ]
-            },
-            fallbacks=[
-                CommandHandler('cancel', cancel)
-            ],
-            name="add_expense",
-            persistent=False,
-            allow_reentry=True
+        await update.message.reply_text(
+            f"✅ Сумма: {amount:.2f} руб.\n\n"
+            f"📋 **Выберите категорию:**\n\n{categories}\n\n"
+            "✏️ **Введите название категории из списка выше**",
+            parse_mode='Markdown'
         )
+        return CATEGORY
 
-        # Добавляем ConversationHandler ПЕРВЫМ
-        telegram_app.add_handler(conv_handler)
-        logger.info("✅ ConversationHandler добавлен")
-
-        # 2. Затем обычные команды
-        telegram_app.add_handler(CommandHandler("start", start_command))
-        telegram_app.add_handler(CommandHandler("help", help_command))
-        telegram_app.add_handler(CommandHandler("stats", show_stats))
-        telegram_app.add_handler(CommandHandler("today", show_today_expenses))
-        telegram_app.add_handler(CommandHandler("month", show_month_expenses))
-        telegram_app.add_handler(CommandHandler("categories", show_categories))
-        telegram_app.add_handler(CommandHandler("clear", clear_expenses_start))
-        telegram_app.add_handler(CommandHandler("cancel", cancel))
-
-        logger.info("✅ Все обработчики добавлены")
-
-        # 3. ИНИЦИАЛИЗИРУЕМ приложение
-        await telegram_app.initialize()
-        logger.info("✅ Приложение бота инициализировано")
-
-        logger.info("✅ Telegram бот инициализирован успешно")
-        if db:
-            logger.info(f"✅ База данных: {type(db).__name__}")
-        else:
-            logger.warning("⚠️ База данных не инициализирована")
-
-        return True
-
-    except Exception as bot_init_error:
-        logger.error(f"❌ Ошибка инициализации бота: {bot_init_error}", exc_info=True)
-        telegram_app = None
-        return False
+    except ValueError:
+        logger.warning(f"❌ Неверный формат суммы: '{update.message.text}'")
+        await update.message.reply_text("❌ Неверный формат. Введите число:")
+        return AMOUNT
 
 
-# ========== ИНИЦИАЛИЗАЦИЯ БОТА ==========
-telegram_app: Optional[Application] = None
+async def process_category(update: Update, context: CallbackContext) -> int:
+    """Обработка выбора категории"""
+    text = update.message.text.strip()
+    logger.info(f"📂 Получена категория: '{text}'")
 
+    if text in CATEGORIES:
+        context.user_data['category'] = text
+        logger.info(f"✅ Категория сохранена: {text}")
 
-def create_and_initialize_bot() -> bool:
-    """Создание и инициализация приложения бота (синхронная обертка)"""
-    return run_async_safe(async_create_and_initialize_bot())
-
-
-# ========== WEBHOOK МАРШРУТЫ ==========
-@app.route('/webhook', methods=['POST'])
-def webhook_handler():
-    """Обработчик вебхука от Telegram"""
-    global telegram_app
-
-    logger.info(f"📨 Получен webhook запрос")
-
-    if not telegram_app:
-        logger.warning("⚠️ Бот не инициализирован, инициализируем...")
-        if not create_and_initialize_bot():
-            logger.error("❌ Не удалось инициализировать бота")
-            return 'Bot initialization failed', 500
-
-    if request.headers.get('Content-Type') != 'application/json':
-        logger.error("❌ Неверный тип контента")
-        return 'Invalid content type', 400
-
-    try:
-        data = json.loads(request.data.decode('utf-8'))
-
-        if telegram_app is None:
-            logger.error("❌ telegram_app равен None")
-            return 'Bot not initialized', 500
-
-        update = Update.de_json(data, telegram_app.bot)
-
-        # Логируем что получили
-        if update.message:
-            logger.info(f"📨 Сообщение от {update.effective_user.id}: '{update.message.text}'")
-
-        run_async_safe(telegram_app.process_update(update))
-        logger.info(f"✅ Обновление обработано")
-        return 'OK', 200
-
-    except Exception as webhook_error:
-        logger.error(f"❌ Ошибка webhook: {webhook_error}")
-        telegram_app = None
-        return 'Internal error', 500
-
-
-@app.route('/set_webhook', methods=['GET'])
-def set_webhook_handler():
-    """Установка вебхука для бота"""
-    global telegram_app
-
-    logger.info("🔄 Запрос на установку webhook")
-
-    if not telegram_app:
-        logger.warning("⚠️ Бот не инициализирован, инициализируем...")
-        if not create_and_initialize_bot():
-            return """
-            <!DOCTYPE html>
-            <html>
-            <head><title>Ошибка</title></head>
-            <body style="font-family: Arial; padding: 20px;">
-                <h1>❌ Telegram бот не инициализирован</h1>
-                <p>Проверьте TELEGRAM_BOT_TOKEN</p>
-            </body>
-            </html>
-            """, 500
-
-    try:
-        webhook_url = f"https://{request.host}/webhook"
-        logger.info(f"🔗 Устанавливаем webhook на {webhook_url}")
-
-        # ВАЖНО: Удаляем все ожидающие обновления и старый кеш
-        result = run_async_safe(
-            telegram_app.bot.set_webhook(
-                url=webhook_url,
-                drop_pending_updates=True,
-                allowed_updates=["message", "callback_query"]
-            )
+        await update.message.reply_text(
+            f"✅ Категория: {text}\n\n"
+            "📝 **Введите описание (необязательно):**\n"
+            "Напишите описание или /skip чтобы пропустить\n"
+            "/cancel для отмены",
+            parse_mode='Markdown'
         )
-
-        # Также удаляем команды меню если они есть
-        run_async_safe(telegram_app.bot.delete_my_commands())
-
-        logger.info(f"✅ Webhook установлен: {result}")
-
-        return f"""
-        <!DOCTYPE html>
-        <html>
-        <head><title>Webhook Set</title></head>
-        <body style="font-family: Arial; padding: 20px;">
-            <h1>✅ Вебхук установлен</h1>
-            <p><strong>URL:</strong> {webhook_url}</p>
-            <p><strong>Результат:</strong> {result}</p>
-            <p><strong>Старый кеш очищен:</strong> Да</p>
-            <p><strong>Ожидающие обновления удалены:</strong> Да</p>
-            <p><a href="/">На главную</a></p>
-        </body>
-        </html>
-        """
-
-    except Exception as set_webhook_error:
-        logger.error(f"❌ Ошибка установки webhook: {set_webhook_error}")
-        return f"""
-        <!DOCTYPE html>
-        <html>
-        <head><title>Ошибка</title></head>
-        <body style="font-family: Arial; padding: 20px;">
-            <h1>❌ Ошибка установки вебхука</h1>
-            <pre>{str(set_webhook_error)}</pre>
-            <p><a href="/">На главную</a></p>
-        </body>
-        </html>
-        """, 500
+        return DESCRIPTION
+    else:
+        logger.warning(f"❌ Категория не найдена: '{text}'")
+        categories = "\n".join([f"• {cat}" for cat in CATEGORIES])
+        await update.message.reply_text(
+            f"❌ Категория не найдена.\n\n**Доступные категории:**\n{categories}\n"
+            "Введите категорию точно как в списке:",
+            parse_mode='Markdown'
+        )
+        return CATEGORY
 
 
-@app.route('/delete_webhook', methods=['GET'])
-def delete_webhook_handler():
-    """Удаление вебхука (для сброса)"""
-    global telegram_app
+async def process_description(update: Update, context: CallbackContext) -> int:
+    """Обработка описания"""
+    text = update.message.text.strip()
+    user_id = update.effective_user.id
 
-    if not telegram_app:
-        create_and_initialize_bot()
+    logger.info(f"📝 Получено описание: '{text}'")
 
-    try:
-        if telegram_app and telegram_app.bot:
-            result = run_async_safe(telegram_app.bot.delete_webhook(drop_pending_updates=True))
-            return f"""
-            <!DOCTYPE html>
-            <html>
-            <head><title>Webhook Deleted</title></head>
-            <body style="font-family: Arial; padding: 20px;">
-                <h1>🗑️ Вебхук удален</h1>
-                <p><strong>Результат:</strong> {result}</p>
-                <p><strong>Кеш очищен:</strong> Да</p>
-                <p><a href="/set_webhook">Установить новый вебхук</a></p>
-            </body>
-            </html>
-            """
-    except Exception as e:
-        return f"Ошибка: {e}", 500
+    # Обработка skip команды (текст, а не команда)
+    if text.lower() in ['skip', 'пропустить', 'без описания']:
+        text = None
+        logger.info("⏭️  Описание пропущено")
 
+    amount = context.user_data.get('amount')
+    category = context.user_data.get('category')
 
-@app.route('/')
-def home_handler():
-    """Главная страница"""
-    token_set = bool(TELEGRAM_TOKEN and TELEGRAM_TOKEN != "your_bot_token_here")
-    token_preview = TELEGRAM_TOKEN[:10] + "..." if token_set else "Не установлен"
-    bot_status = "✅ ИНИЦИАЛИЗИРОВАН" if telegram_app else "❌ НЕ ИНИЦИАЛИЗИРОВАН"
+    if not amount or not category:
+        logger.error("❌ Ошибка: потеряны данные amount или category")
+        await update.message.reply_text("❌ Ошибка: данные потеряны.")
+        context.user_data.clear()
+        return ConversationHandler.END
 
-    return f"""
-    <!DOCTYPE html>
-    <html>
-    <head><title>🤖 TgBot - Учет расходов</title></head>
-    <body style="font-family: Arial; padding: 20px;">
-        <h1>🤖 TgBot - Учет расходов</h1>
-        <p><strong>Telegram бот:</strong> {bot_status}</p>
-        <p><strong>Токен:</strong> {token_preview}</p>
-        <p><strong>База данных:</strong> {'✅' if db else '❌'}</p>
-        <p><a href="/set_webhook">🔗 Установить вебхук (очистить кеш)</a></p>
-        <p><a href="/delete_webhook">🗑️ Удалить вебхук</a></p>
-        <p><a href="/healthz">🩺 Health Check</a></p>
-        <hr>
-        <p><small>Время: {time.strftime('%Y-%m-%d %H:%M:%S')}</small></p>
-    </body>
-    </html>
-    """
+    success = db.add_expense(user_id, amount, category, text)
+
+    if success:
+        response = f"✅ **Расход добавлен!**\n\n💰 {amount:.2f} руб. - {category}"
+        if text:
+            response += f"\n📝 {text}"
+        logger.info(f"✅ Расход добавлен для пользователя {user_id}: {amount} руб. - {category}")
+    else:
+        response = "❌ Ошибка сохранения"
+        logger.error(f"❌ Ошибка сохранения для пользователя {user_id}")
+
+    context.user_data.clear()
+    await update.message.reply_text(response, parse_mode='Markdown')
+    return ConversationHandler.END
 
 
-@app.route('/healthz')
-def health_check_handler():
-    """Health check для Render"""
-    return {
-        "status": "healthy",
-        "timestamp": time.time(),
-        "bot_initialized": bool(telegram_app),
-        "database_initialized": db is not None,
-        "token_configured": TELEGRAM_TOKEN is not None and TELEGRAM_TOKEN != "your_bot_token_here",
-    }, 200
+async def cancel(update: Update, context: CallbackContext) -> int:
+    """Отмена диалога"""
+    user_id = update.effective_user.id
+    logger.info(f"🚫 Отмена пользователем {user_id}")
+    context.user_data.clear()
+    await update.message.reply_text("🚫 Операция отменена.")
+    return ConversationHandler.END
 
 
-if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 10000))
-    print("=" * 50)
-    print("🚀 Запуск TgBot сервера")
-    print(f"📌 Порт: {port}")
-    print("=" * 50)
-    app.run(host='0.0.0.0', port=port, debug=False)
+# ========== КОМАНДЫ ПРОСМОТРА ==========
+async def show_today_expenses(update: Update, context: CallbackContext) -> int:
+    """Расходы за сегодня"""
+    context.user_data.clear()
+    user_id = update.effective_user.id
+    logger.info(f"📅 Запрос расходов за сегодня от {user_id}")
+    expenses = db.get_today_expenses(user_id)
+
+    if not expenses:
+        await update.message.reply_text("📅 **Сегодня нет расходов.**")
+        return ConversationHandler.END
+
+    total = sum(exp[1] for exp in expenses)
+    message = "📅 **Расходы за сегодня:**\n\n"
+
+    for exp in expenses:
+        amount, category, description, date = exp[1], exp[2], exp[3], exp[4]
+        time_str = date.strftime("%H:%M")
+        message += f"• **{amount:.2f} руб.** - {category}\n"
+        if description:
+            message += f"  📝 {description}\n"
+        message += f"  ⏰ {time_str}\n\n"
+
+    message += f"💰 **Итого: {total:.2f} руб.**"
+
+    logger.info(f"📊 Показаны расходы за сегодня: {total:.2f} руб.")
+
+    await update.message.reply_text(message, parse_mode='Markdown')
+    return ConversationHandler.END
+
+
+async def show_month_expenses(update: Update, context: CallbackContext) -> int:
+    """Расходы за месяц"""
+    context.user_data.clear()
+    user_id = update.effective_user.id
+    logger.info(f"📈 Запрос расходов за месяц от {user_id}")
+    expenses = db.get_month_expenses(user_id)
+
+    if not expenses:
+        await update.message.reply_text("📈 **В этом месяце нет расходов.**")
+        return ConversationHandler.END
+
+    total = sum(exp[1] for exp in expenses)
+    message = "📈 **Расходы за месяц:**\n\n"
+
+    for exp in expenses:
+        amount, category, description, date = exp[1], exp[2], exp[3], exp[4]
+        date_str = date.strftime("%d.%m")
+        message += f"• **{amount:.2f} руб.** - {category}\n"
+        if description:
+            message += f"  📝 {description}\n"
+        message += f"  📅 {date_str}\n\n"
+
+    message += f"💰 **Итого: {total:.2f} руб.**"
+
+    logger.info(f"📊 Показаны расходы за месяц: {total:.2f} руб.")
+
+    await update.message.reply_text(message, parse_mode='Markdown')
+    return ConversationHandler.END
+
+
+async def show_stats(update: Update, context: CallbackContext) -> int:
+    """Статистика"""
+    context.user_data.clear()
+    user_id = update.effective_user.id
+    logger.info(f"📊 Запрос статистики от {user_id}")
+    stats = db.get_expenses_by_category(user_id)
+    total = db.get_total_expenses(user_id)
+
+    if not stats:
+        await update.message.reply_text("📊 **Нет статистики.**")
+        return ConversationHandler.END
+
+    message = "📊 **Статистика:**\n\n"
+
+    for category, amount in stats.items():
+        percentage = (amount / total * 100) if total > 0 else 0
+        message += f"• **{category}:** {amount:.2f} руб. ({percentage:.1f}%)\n"
+
+    message += f"\n💰 **Всего: {total:.2f} руб.**"
+
+    logger.info(f"📊 Показана статистика: {total:.2f} руб. по {len(stats)} категориям")
+
+    await update.message.reply_text(message, parse_mode='Markdown')
+    return ConversationHandler.END
+
+
+# ========== УПРОЩЕННАЯ КОМАНДА ОЧИСТКИ ==========
+async def clear_expenses_start(update: Update, context: CallbackContext) -> int:
+    """Очистка расходов (без подтверждения)"""
+    context.user_data.clear()
+    user_id = update.effective_user.id
+
+    # Получаем сумму перед удалением
+    total = db.get_total_expenses(user_id)
+
+    if total == 0:
+        await update.message.reply_text("🗑️ **Нет расходов для очистки.**")
+        logger.info(f"🔄 Попытка очистки при нулевых расходах от {user_id}")
+        return ConversationHandler.END
+
+    # Сразу удаляем
+    success = db.clear_user_expenses(user_id)
+
+    if success:
+        await update.message.reply_text(
+            f"✅ **Все расходы ({total:.2f} руб.) удалены!**\n\n"
+            "⚠️ Это действие нельзя отменить.",
+            parse_mode='Markdown'
+        )
+        logger.info(f"🗑️  Расходы ({total:.2f} руб.) очищены для пользователя {user_id}")
+    else:
+        await update.message.reply_text("❌ Ошибка при удалении расходов.")
+        logger.error(f"❌ Ошибка очистки расходов для {user_id}")
+
+    return ConversationHandler.END
+
+
+# ========== ФУНКЦИЯ ДЛЯ ОТЛАДКИ ==========
+async def echo_debug(update: Update, context: CallbackContext) -> int:
+    """Функция для отладки - показывает что получил бот"""
+    user_id = update.effective_user.id
+    text = update.message.text or "(без текста)"
+
+    logger.info(f"🔍 DEBUG: Пользователь {user_id} отправил: '{text}'")
+    logger.info(f"🔍 DEBUG: user_data = {context.user_data}")
+
+    await update.message.reply_text(
+        f"🔍 **Отладка:**\n\n"
+        f"User ID: `{user_id}`\n"
+        f"Текст: `{text}`\n"
+        f"user_data: `{context.user_data}`\n\n"
+        f"Используйте /add для добавления расхода",
+        parse_mode='Markdown'
+    )
+    return ConversationHandler.END
