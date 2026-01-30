@@ -1,5 +1,6 @@
 import os
 import json
+import time
 import logging
 import asyncio
 from typing import Optional
@@ -67,10 +68,19 @@ async def async_create_and_initialize_bot() -> bool:
         telegram_app = Application.builder().token(TELEGRAM_TOKEN).build()
         logger.info("✅ Приложение бота создано")
 
-        # ========== КРИТИЧЕСКИ ВАЖНО: ПРАВИЛЬНЫЙ ПОРЯДОК ==========
+        # ========== КРИТИЧЕСКИ ВАЖНЫЙ ПОРЯДОК ОБРАБОТЧИКОВ ==========
 
-        # 0. Сначала ConversationHandler для добавления расхода (САМЫЙ ВАЖНЫЙ!)
-        # Фильтры должны быть ОЧЕНЬ специфичными
+        # 1. ОБРАБОТЧИКИ КОМАНД (должны быть ПЕРВЫМИ!)
+        telegram_app.add_handler(CommandHandler("start", start_command))
+        telegram_app.add_handler(CommandHandler("help", help_command))
+        telegram_app.add_handler(CommandHandler("stats", show_stats))
+        telegram_app.add_handler(CommandHandler("today", show_today_expenses))
+        telegram_app.add_handler(CommandHandler("month", show_month_expenses))
+        telegram_app.add_handler(CommandHandler("categories", show_categories))
+        telegram_app.add_handler(CommandHandler("clear", clear_expenses_start))
+        telegram_app.add_handler(CommandHandler("cancel", cancel))  # Важно: /cancel работает всегда
+
+        # 2. CONVERSATIONHANDLER для добавления расхода (второй по приоритету)
         conv_handler = ConversationHandler(
             entry_points=[CommandHandler('add', add_expense_start)],
             states={
@@ -101,30 +111,16 @@ async def async_create_and_initialize_bot() -> bool:
             persistent=False,
             allow_reentry=True
         )
-
-        # 1. Добавляем ConversationHandler ПЕРВЫМ
         telegram_app.add_handler(conv_handler)
 
-        # 2. Затем обработчики отдельных команд
-        telegram_app.add_handler(CommandHandler("start", start_command))
-        telegram_app.add_handler(CommandHandler("help", help_command))
-        telegram_app.add_handler(CommandHandler("stats", show_stats))
-        telegram_app.add_handler(CommandHandler("today", show_today_expenses))
-        telegram_app.add_handler(CommandHandler("month", show_month_expenses))
-        telegram_app.add_handler(CommandHandler("categories", show_categories))
-        telegram_app.add_handler(CommandHandler("clear", clear_expenses_start))
-
-        # 3. Отдельно CommandHandler для /cancel (должен работать везде)
-        telegram_app.add_handler(CommandHandler("cancel", cancel))
-
-        # 4. В САМОМ КОНЦЕ - общий обработчик для случайных сообщений
-        # Используем более строгий фильтр
+        # 3. ОБЩИЙ ОБРАБОТЧИК СООБЩЕНИЙ (всегда ПОСЛЕДНИЙ)
+        # Фильтр: текст, НЕ команда, НЕ начинается с /
         telegram_app.add_handler(MessageHandler(
-            filters.TEXT & ~filters.COMMAND,
+            filters.TEXT & ~filters.COMMAND & ~filters.Regex(r'^/'),
             handle_message
         ))
 
-        # 5. ИНИЦИАЛИЗИРУЕМ приложение
+        # 4. ИНИЦИАЛИЗИРУЕМ приложение
         logger.info("🔄 Инициализируем приложение бота...")
         await telegram_app.initialize()
         logger.info("✅ Приложение бота инициализировано")
@@ -148,6 +144,9 @@ def create_and_initialize_bot() -> bool:
     """Создание и инициализация приложения бота (синхронная обертка)"""
     return run_async_safe(async_create_and_initialize_bot())
 
+
+# Остальной код остается без изменений...
+# [webhook handlers, routes, etc.]
 
 # ========== WEBHOOK МАРШРУТЫ ==========
 @app.route('/webhook', methods=['POST'])
@@ -208,9 +207,9 @@ def set_webhook_handler():
             <head><title>Ошибка</title></head>
             <body style="font-family: Arial; padding: 20px;">
                 <h1>❌ Telegram бот не инициализирован</h1>
-                <p>Проверьте TELEGRAM_BOT_TOKEN в переменных окружения.</p>
+                <p>Проверьте TELEGRAM_BOT_TOKEN в переменных окружения</p>
                 <p>Токен установлен: Да</p>
-                <p>Попробуйте перезапустить приложение.</p>
+                <p>Попробуйте перезапустить приложение</p>
             </body>
             </html>
             """, 500
@@ -219,7 +218,6 @@ def set_webhook_handler():
         webhook_url = f"https://{request.host}/webhook"
         logger.info(f"🔗 Устанавливаем webhook на URL: {webhook_url}")
 
-        # Гарантируем, что telegram_app не None после проверки выше
         if telegram_app is None:
             return """
             <!DOCTYPE html>
@@ -286,7 +284,6 @@ def get_webhook_info_handler():
         """, 500
 
     try:
-        # Гарантируем, что telegram_app не None после проверки выше
         if telegram_app is None:
             info_json = "Бот не доступен"
         else:
@@ -319,19 +316,12 @@ def get_webhook_info_handler():
         """, 500
 
 
-# ========== ПРОСТЫЕ СТРАНИЦЫ ==========
 @app.route('/')
 def home_handler():
     """Главная страница"""
-    # Импортируем time только здесь, если он нужен
-    import time
-
     token_status = "✅ УСТАНОВЛЕН" if TELEGRAM_TOKEN and TELEGRAM_TOKEN != "your_bot_token_here" else "❌ ОТСУТСТВУЕТ"
-
-    # Отображаем первую часть токена для отладки
     token_preview = TELEGRAM_TOKEN[
                         :10] + "..." if TELEGRAM_TOKEN and TELEGRAM_TOKEN != "your_bot_token_here" else "Не установлен"
-
     bot_status = "✅ ИНИЦИАЛИЗИРОВАН" if telegram_app else "❌ НЕ ИНИЦИАЛИЗИРОВАН"
 
     if db is None:
@@ -364,8 +354,6 @@ def home_handler():
 @app.route('/healthz')
 def health_check_handler():
     """Health check для Render"""
-    import time
-
     return {
         "status": "healthy",
         "timestamp": time.time(),
@@ -379,7 +367,6 @@ def health_check_handler():
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
 
-    # Выводим информацию о конфигурации при запуске
     print("=" * 50)
     print("🚀 Запуск TgBot сервера")
     print(f"📌 Порт: {port}")
