@@ -15,7 +15,7 @@ from handlers import (
     add_expense_start, process_amount, process_category, process_description,
     cancel,
     show_stats, show_today_expenses, show_month_expenses,
-    clear_expenses_start, handle_message,
+    clear_expenses_start,
     show_categories
 )
 
@@ -35,16 +35,8 @@ app = Flask(__name__)
 
 def run_async_safe(coro):
     """Безопасный запуск асинхронной функции"""
-    try:
-        loop = asyncio.get_event_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-
-    if loop.is_closed():
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
     try:
         return loop.run_until_complete(coro)
     except Exception as e:
@@ -61,26 +53,35 @@ async def async_create_and_initialize_bot() -> bool:
         return False
 
     try:
-        logger.info(f"🔄 Начинаем инициализацию бота с токеном: {TELEGRAM_TOKEN[:10]}...")
+        logger.info("🔄 Начинаем инициализацию бота...")
 
-        # 1. Создаем приложение
+        # 1. Создаем приложение с таймаутами
         telegram_app = Application.builder().token(TELEGRAM_TOKEN).build()
         logger.info("✅ Приложение бота создано")
 
-        # ========== КРИТИЧЕСКИ ВАЖНЫЙ ПОРЯДОК ==========
+        # ========== ВАЖНО: Сначала ConversationHandler ==========
 
-        # 1. ConversationHandler для добавления расхода - САМЫЙ ПЕРВЫЙ
+        # ConversationHandler для добавления расхода
         conv_handler = ConversationHandler(
             entry_points=[CommandHandler('add', add_expense_start)],
             states={
                 AMOUNT: [
-                    MessageHandler(filters.TEXT & ~filters.COMMAND, process_amount)
+                    MessageHandler(
+                        filters.TEXT & ~filters.COMMAND,
+                        process_amount
+                    )
                 ],
                 CATEGORY: [
-                    MessageHandler(filters.TEXT & ~filters.COMMAND, process_category)
+                    MessageHandler(
+                        filters.TEXT & ~filters.COMMAND,
+                        process_category
+                    )
                 ],
                 DESCRIPTION: [
-                    MessageHandler(filters.TEXT & ~filters.COMMAND, process_description),
+                    MessageHandler(
+                        filters.TEXT & ~filters.COMMAND,
+                        process_description
+                    ),
                     CommandHandler('skip', process_description)
                 ]
             },
@@ -92,9 +93,11 @@ async def async_create_and_initialize_bot() -> bool:
             allow_reentry=True
         )
 
+        # Добавляем ConversationHandler ПЕРВЫМ
         telegram_app.add_handler(conv_handler)
+        logger.info("✅ ConversationHandler добавлен")
 
-        # 2. Обычные команды
+        # 2. Затем обычные команды
         telegram_app.add_handler(CommandHandler("start", start_command))
         telegram_app.add_handler(CommandHandler("help", help_command))
         telegram_app.add_handler(CommandHandler("stats", show_stats))
@@ -104,19 +107,17 @@ async def async_create_and_initialize_bot() -> bool:
         telegram_app.add_handler(CommandHandler("clear", clear_expenses_start))
         telegram_app.add_handler(CommandHandler("cancel", cancel))
 
-        # 3. ОБЩИЙ ОБРАБОТЧИК - но ТОЛЬКО для сообщений, которые не начинаются с /
-        telegram_app.add_handler(MessageHandler(
-            filters.TEXT & ~filters.COMMAND & ~filters.Regex(r'^/'),
-            handle_message
-        ))
+        logger.info("✅ Все обработчики добавлены")
 
-        # 4. ИНИЦИАЛИЗИРУЕМ приложение
-        logger.info("🔄 Инициализируем приложение бота...")
+        # 3. ИНИЦИАЛИЗИРУЕМ приложение
         await telegram_app.initialize()
         logger.info("✅ Приложение бота инициализировано")
 
         logger.info("✅ Telegram бот инициализирован успешно")
-        logger.info(f"✅ Тип базы данных: {type(db).__name__}")
+        if db:
+            logger.info(f"✅ База данных: {type(db).__name__}")
+        else:
+            logger.warning("⚠️ База данных не инициализирована")
 
         return True
 
@@ -141,17 +142,13 @@ def webhook_handler():
     """Обработчик вебхука от Telegram"""
     global telegram_app
 
-    logger.info(f"📨 Получен webhook запрос, telegram_app: {telegram_app is not None}")
+    logger.info(f"📨 Получен webhook запрос")
 
     if not telegram_app:
-        logger.warning("⚠️ Бот не инициализирован, пытаемся инициализировать...")
+        logger.warning("⚠️ Бот не инициализирован, инициализируем...")
         if not create_and_initialize_bot():
-            logger.error("❌ Не удалось инициализировать бота для webhook")
+            logger.error("❌ Не удалось инициализировать бота")
             return 'Bot initialization failed', 500
-
-    if db is None:
-        logger.error("❌ База данных не инициализирована")
-        return 'Database not initialized', 500
 
     if request.headers.get('Content-Type') != 'application/json':
         logger.error("❌ Неверный тип контента")
@@ -159,21 +156,23 @@ def webhook_handler():
 
     try:
         data = json.loads(request.data.decode('utf-8'))
-        logger.debug(f"📦 Данные webhook: {data}")
 
         if telegram_app is None:
-            logger.error("❌ telegram_app все еще None")
+            logger.error("❌ telegram_app равен None")
             return 'Bot not initialized', 500
 
         update = Update.de_json(data, telegram_app.bot)
-        logger.info(f"📨 Получено обновление: {update.update_id}")
+
+        # Логируем что получили
+        if update.message:
+            logger.info(f"📨 Сообщение от {update.effective_user.id}: '{update.message.text}'")
 
         run_async_safe(telegram_app.process_update(update))
-        logger.info(f"✅ Обработано обновление: {update.update_id}")
+        logger.info(f"✅ Обновление обработано")
         return 'OK', 200
 
     except Exception as webhook_error:
-        logger.error(f"❌ Ошибка webhook: {webhook_error}", exc_info=True)
+        logger.error(f"❌ Ошибка webhook: {webhook_error}")
         telegram_app = None
         return 'Internal error', 500
 
@@ -183,10 +182,10 @@ def set_webhook_handler():
     """Установка вебхука для бота"""
     global telegram_app
 
-    logger.info(f"🔄 Запрос на установку webhook, telegram_app: {telegram_app is not None}")
+    logger.info("🔄 Запрос на установку webhook")
 
     if not telegram_app:
-        logger.warning("⚠️ Бот не инициализирован, пытаемся инициализировать...")
+        logger.warning("⚠️ Бот не инициализирован, инициализируем...")
         if not create_and_initialize_bot():
             return """
             <!DOCTYPE html>
@@ -194,34 +193,26 @@ def set_webhook_handler():
             <head><title>Ошибка</title></head>
             <body style="font-family: Arial; padding: 20px;">
                 <h1>❌ Telegram бот не инициализирован</h1>
-                <p>Проверьте TELEGRAM_BOT_TOKEN в переменных окружения</p>
-                <p>Токен установлен: Да</p>
-                <p>Попробуйте перезапустить приложение</p>
+                <p>Проверьте TELEGRAM_BOT_TOKEN</p>
             </body>
             </html>
             """, 500
 
     try:
         webhook_url = f"https://{request.host}/webhook"
-        logger.info(f"🔗 Устанавливаем webhook на URL: {webhook_url}")
+        logger.info(f"🔗 Устанавливаем webhook на {webhook_url}")
 
-        if telegram_app is None:
-            return """
-            <!DOCTYPE html>
-            <html>
-            <head><title>Ошибка</title></head>
-            <body style="font-family: Arial; padding: 20px;">
-                <h1>❌ Telegram бот не доступен</h1>
-            </body>
-            </html>
-            """, 500
-
+        # ВАЖНО: Удаляем все ожидающие обновления и старый кеш
         result = run_async_safe(
             telegram_app.bot.set_webhook(
                 url=webhook_url,
-                drop_pending_updates=True
+                drop_pending_updates=True,
+                allowed_updates=["message", "callback_query"]
             )
         )
+
+        # Также удаляем команды меню если они есть
+        run_async_safe(telegram_app.bot.delete_my_commands())
 
         logger.info(f"✅ Webhook установлен: {result}")
 
@@ -233,14 +224,15 @@ def set_webhook_handler():
             <h1>✅ Вебхук установлен</h1>
             <p><strong>URL:</strong> {webhook_url}</p>
             <p><strong>Результат:</strong> {result}</p>
-            <p><strong>Статус бота:</strong> Инициализирован ✅</p>
+            <p><strong>Старый кеш очищен:</strong> Да</p>
+            <p><strong>Ожидающие обновления удалены:</strong> Да</p>
             <p><a href="/">На главную</a></p>
         </body>
         </html>
         """
 
     except Exception as set_webhook_error:
-        logger.error(f"❌ Ошибка установки webhook: {set_webhook_error}", exc_info=True)
+        logger.error(f"❌ Ошибка установки webhook: {set_webhook_error}")
         return f"""
         <!DOCTYPE html>
         <html>
@@ -254,70 +246,39 @@ def set_webhook_handler():
         """, 500
 
 
-@app.route('/get_webhook_info', methods=['GET'])
-def get_webhook_info_handler():
-    """Получение информации о вебхуке"""
+@app.route('/delete_webhook', methods=['GET'])
+def delete_webhook_handler():
+    """Удаление вебхука (для сброса)"""
     global telegram_app
 
     if not telegram_app:
-        return """
-        <!DOCTYPE html>
-        <html>
-        <head><title>Ошибка</title></head>
-            <body style="font-family: Arial; padding: 20px;">
-            <h1>❌ Telegram бот не инициализирован</h1>
-        </body>
-        </html>
-        """, 500
+        create_and_initialize_bot()
 
     try:
-        if telegram_app is None:
-            info_json = "Бот не доступен"
-        else:
-            info = run_async_safe(telegram_app.bot.get_webhook_info())
-            info_json = json.dumps(info.to_dict(), indent=2, ensure_ascii=False)
-
-        return f"""
-        <!DOCTYPE html>
-        <html>
-        <head><title>Webhook Info</title></head>
-        <body style="font-family: Arial; padding: 20px;">
-            <h1>📊 Информация о вебхуке</h1>
-            <pre>{info_json}</pre>
-            <p><a href="/">На главную</a></p>
-        </body>
-        </html>
-        """
-
-    except Exception as get_webhook_error:
-        return f"""
-        <!DOCTYPE html>
-        <html>
-        <head><title>Ошибка</title></head>
+        if telegram_app and telegram_app.bot:
+            result = run_async_safe(telegram_app.bot.delete_webhook(drop_pending_updates=True))
+            return f"""
+            <!DOCTYPE html>
+            <html>
+            <head><title>Webhook Deleted</title></head>
             <body style="font-family: Arial; padding: 20px;">
-            <h1>❌ Ошибка получения информации</h1>
-            <pre>{str(get_webhook_error)}</pre>
-            <p><a href="/">На главную</a></p>
-        </body>
-        </html>
-        """, 500
+                <h1>🗑️ Вебхук удален</h1>
+                <p><strong>Результат:</strong> {result}</p>
+                <p><strong>Кеш очищен:</strong> Да</p>
+                <p><a href="/set_webhook">Установить новый вебхук</a></p>
+            </body>
+            </html>
+            """
+    except Exception as e:
+        return f"Ошибка: {e}", 500
 
 
-# ========== ПРОСТЫЕ СТРАНИЦЫ ==========
 @app.route('/')
 def home_handler():
     """Главная страница"""
-    token_status = "✅ УСТАНОВЛЕН" if TELEGRAM_TOKEN and TELEGRAM_TOKEN != "your_bot_token_here" else "❌ ОТСУТСТВУЕТ"
-    token_preview = TELEGRAM_TOKEN[
-                        :10] + "..." if TELEGRAM_TOKEN and TELEGRAM_TOKEN != "your_bot_token_here" else "Не установлен"
+    token_set = bool(TELEGRAM_TOKEN and TELEGRAM_TOKEN != "your_bot_token_here")
+    token_preview = TELEGRAM_TOKEN[:10] + "..." if token_set else "Не установлен"
     bot_status = "✅ ИНИЦИАЛИЗИРОВАН" if telegram_app else "❌ НЕ ИНИЦИАЛИЗИРОВАН"
-
-    if db is None:
-        db_status = "❌ НЕ ИНИЦИАЛИЗИРОВАНА"
-        database_type_info = "Неизвестно"
-    else:
-        database_type_info = type(db).__name__
-        db_status = "✅ PostgreSQL" if database_type_info == 'PostgreSQLDatabase' else "💻 SQLite"
 
     return f"""
     <!DOCTYPE html>
@@ -326,11 +287,10 @@ def home_handler():
     <body style="font-family: Arial; padding: 20px;">
         <h1>🤖 TgBot - Учет расходов</h1>
         <p><strong>Telegram бот:</strong> {bot_status}</p>
-        <p><strong>Токен бота:</strong> {token_status}</p>
-        <p><strong>Токен (первые 10 символов):</strong> {token_preview}</p>
-        <p><strong>База данных:</strong> {db_status}</p>
-        <p><strong>Тип базы данных:</strong> {database_type_info}</p>
-        <p><a href="/set_webhook">🔗 Установить вебхук</a></p>
+        <p><strong>Токен:</strong> {token_preview}</p>
+        <p><strong>База данных:</strong> {'✅' if db else '❌'}</p>
+        <p><a href="/set_webhook">🔗 Установить вебхук (очистить кеш)</a></p>
+        <p><a href="/delete_webhook">🗑️ Удалить вебхук</a></p>
         <p><a href="/healthz">🩺 Health Check</a></p>
         <hr>
         <p><small>Время: {time.strftime('%Y-%m-%d %H:%M:%S')}</small></p>
@@ -341,7 +301,7 @@ def home_handler():
 
 @app.route('/healthz')
 def health_check_handler():
-    """Health check для Render - ОБЯЗАТЕЛЬНО ДОЛЖЕН БЫТЬ!"""
+    """Health check для Render"""
     return {
         "status": "healthy",
         "timestamp": time.time(),
@@ -351,14 +311,10 @@ def health_check_handler():
     }, 200
 
 
-# ========== ЗАПУСК ПРИЛОЖЕНИЯ ==========
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
     print("=" * 50)
     print("🚀 Запуск TgBot сервера")
     print(f"📌 Порт: {port}")
-    print(f"🔑 TELEGRAM_TOKEN установлен: {bool(TELEGRAM_TOKEN and TELEGRAM_TOKEN != 'your_bot_token_here')}")
-    print(f"🤖 Бот инициализирован: {telegram_app is not None}")
-    print(f"💾 База данных: {'✅' if db else '❌'} {type(db).__name__ if db else 'Не инициализирована'}")
     print("=" * 50)
     app.run(host='0.0.0.0', port=port, debug=False)
