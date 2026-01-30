@@ -39,7 +39,7 @@ async def start_command(update: Update, context: CallbackContext) -> int:
     user = update.effective_user
     logger.info(f"User {user.id} started the bot")
 
-    # Используем context для очистки данных
+    # Очищаем user_data при старте
     context.user_data.clear()
 
     # Добавляем пользователя в базу
@@ -74,13 +74,10 @@ async def start_command(update: Update, context: CallbackContext) -> int:
     return ConversationHandler.END
 
 
-async def help_command(update: Update, context: CallbackContext) -> int:
+async def help_command(update: Update, _context: CallbackContext) -> int:
     """Команда помощи /help"""
     user_id = update.effective_user.id
     logger.info(f"Help command from user {user_id}")
-
-    # Используем context для логирования данных
-    logger.info(f"Context user data: {context.user_data}")
 
     help_text = """
     📚 **Справка по командам:**
@@ -122,8 +119,6 @@ async def add_expense_start(update: Update, context: CallbackContext) -> int:
 
     # Очищаем user_data при начале диалога
     context.user_data.clear()
-    # Сохраняем информацию о начале диалога
-    context.user_data['adding_expense'] = True
 
     await update.message.reply_text(
         "💸 **Введите сумму расхода:**\n"
@@ -138,7 +133,9 @@ async def add_expense_start(update: Update, context: CallbackContext) -> int:
 async def process_amount(update: Update, context: CallbackContext) -> int:
     """Обработка введенной суммы"""
     user_id = update.effective_user.id
-    text = update.message.text
+    text = update.message.text.strip()
+
+    logger.info(f"Processing amount: '{text}' from user {user_id}")
 
     try:
         # Пробуем преобразовать в число
@@ -152,8 +149,6 @@ async def process_amount(update: Update, context: CallbackContext) -> int:
 
         # Сохраняем сумму в контексте
         context.user_data['amount'] = amount
-        # Сохраняем состояние
-        context.user_data['conversation_state'] = 'amount_processed'
 
         logger.info(f"User {user_id} entered amount: {amount}")
 
@@ -167,6 +162,7 @@ async def process_amount(update: Update, context: CallbackContext) -> int:
         return CATEGORY
 
     except ValueError:
+        logger.warning(f"Invalid amount format: '{text}'")
         await update.message.reply_text(
             "❌ Неверный формат суммы. Введите число, например: 1500 или 1500.50"
         )
@@ -176,10 +172,13 @@ async def process_amount(update: Update, context: CallbackContext) -> int:
 async def process_category(update: Update, context: CallbackContext) -> int:
     """Обработка выбранной категории"""
     user_id = update.effective_user.id
-    category = update.message.text
+    category = update.message.text.strip()
+
+    logger.info(f"Processing category: '{category}' from user {user_id}")
 
     # Проверяем, что категория из списка
     if category not in CATEGORIES and category != '↩️ Назад':
+        logger.warning(f"Invalid category selected: '{category}'")
         await update.message.reply_text(
             "❌ Пожалуйста, выберите категорию из списка ниже:",
             reply_markup=get_categories_keyboard()
@@ -187,6 +186,7 @@ async def process_category(update: Update, context: CallbackContext) -> int:
         return CATEGORY
 
     if category == '↩️ Назад':
+        logger.info(f"User {user_id} cancelled from category selection")
         await update.message.reply_text(
             "🚫 Добавление расхода отменено.",
             reply_markup=get_main_keyboard()
@@ -196,8 +196,6 @@ async def process_category(update: Update, context: CallbackContext) -> int:
 
     # Сохраняем категорию
     context.user_data['category'] = category
-    # Сохраняем состояние
-    context.user_data['conversation_state'] = 'category_selected'
 
     logger.info(f"User {user_id} selected category: {category}")
 
@@ -215,7 +213,9 @@ async def process_category(update: Update, context: CallbackContext) -> int:
 async def process_description(update: Update, context: CallbackContext) -> int:
     """Обработка описания"""
     user_id = update.effective_user.id
-    description = update.message.text
+    description = update.message.text.strip()
+
+    logger.info(f"Processing description: '{description}' from user {user_id}")
 
     # Пропускаем, если это команда skip
     if description == '/skip':
@@ -226,6 +226,7 @@ async def process_description(update: Update, context: CallbackContext) -> int:
     category = context.user_data.get('category')
 
     if not amount or not category:
+        logger.error(f"Missing data in context for user {user_id}: amount={amount}, category={category}")
         await update.message.reply_text(
             "❌ Ошибка: данные потеряны. Начните заново.",
             reply_markup=get_main_keyboard()
@@ -279,6 +280,7 @@ async def skip_description(update: Update, context: CallbackContext) -> int:
     category = context.user_data.get('category')
 
     if not amount or not category:
+        logger.error(f"Missing data for skip: user {user_id}, amount={amount}, category={category}")
         await update.message.reply_text(
             "❌ Ошибка: данные потеряны. Начните заново.",
             reply_markup=get_main_keyboard()
@@ -337,13 +339,10 @@ async def cancel(update: Update, context: CallbackContext) -> int:
 
 
 # ========== КОМАНДЫ ДЛЯ ПРОСМОТРА ==========
-async def show_today_expenses(update: Update, context: CallbackContext) -> int:
+async def show_today_expenses(update: Update, _context: CallbackContext) -> int:
     """Показать расходы за сегодня"""
     user_id = update.effective_user.id
     logger.info(f"User {user_id} requested today's expenses")
-
-    # Используем context для логирования состояния
-    logger.info(f"Context data for today expenses: {context.user_data}")
 
     try:
         expenses = db.get_today_expenses(user_id)
@@ -388,13 +387,10 @@ async def show_today_expenses(update: Update, context: CallbackContext) -> int:
     return ConversationHandler.END
 
 
-async def show_month_expenses(update: Update, context: CallbackContext) -> int:
+async def show_month_expenses(update: Update, _context: CallbackContext) -> int:
     """Показать расходы за текущий месяц"""
     user_id = update.effective_user.id
     logger.info(f"User {user_id} requested month's expenses")
-
-    # Используем context для логирования
-    logger.info(f"Month expenses context: {context.user_data}")
 
     try:
         expenses = db.get_month_expenses(user_id)
@@ -439,13 +435,10 @@ async def show_month_expenses(update: Update, context: CallbackContext) -> int:
     return ConversationHandler.END
 
 
-async def show_stats(update: Update, context: CallbackContext) -> int:
+async def show_stats(update: Update, _context: CallbackContext) -> int:
     """Показать статистику по категориям"""
     user_id = update.effective_user.id
     logger.info(f"User {user_id} requested statistics")
-
-    # Используем context для логирования
-    logger.info(f"Stats context data: {context.user_data}")
 
     try:
         category_stats = db.get_expenses_by_category(user_id)
@@ -484,13 +477,10 @@ async def show_stats(update: Update, context: CallbackContext) -> int:
     return ConversationHandler.END
 
 
-async def show_categories(update: Update, context: CallbackContext) -> int:
+async def show_categories(update: Update, _context: CallbackContext) -> int:
     """Показать список категорий"""
     user_id = update.effective_user.id
     logger.info(f"Categories command from user {user_id}")
-
-    # Используем context для логирования
-    logger.info(f"Categories context: {context.user_data}")
 
     categories_text = "📋 **Доступные категории:**\n" + "\n".join(f"• {cat}" for cat in CATEGORIES)
     await update.message.reply_text(
@@ -502,13 +492,10 @@ async def show_categories(update: Update, context: CallbackContext) -> int:
 
 
 # ========== ОЧИСТКА РАСХОДОВ ==========
-async def clear_expenses_start(update: Update, context: CallbackContext) -> int:
+async def clear_expenses_start(update: Update, _context: CallbackContext) -> int:
     """Начало очистки расходов"""
     user_id = update.effective_user.id
     logger.info(f"User {user_id} starting to clear expenses")
-
-    # Используем context для отслеживания состояния
-    context.user_data['clearing_expenses'] = True
 
     try:
         total = db.get_total_expenses(user_id)
@@ -521,7 +508,6 @@ async def clear_expenses_start(update: Update, context: CallbackContext) -> int:
         return ConversationHandler.END
 
     if total == 0:
-        context.user_data.clear()
         await update.message.reply_text(
             "🗑️ **У вас ещё нет расходов для очистки.**",
             reply_markup=get_main_keyboard(),
@@ -542,13 +528,12 @@ async def clear_expenses_start(update: Update, context: CallbackContext) -> int:
     return CONFIRM_STATE
 
 
-async def clear_expenses_confirm(update: Update, context: CallbackContext) -> int:
+async def clear_expenses_confirm(update: Update, _context: CallbackContext) -> int:
     """Подтверждение очистки расходов"""
     user_id = update.effective_user.id
     choice = update.message.text
 
     if choice == '❌ Нет, отмена':
-        context.user_data.clear()
         await update.message.reply_text(
             "✅ Очистка отменена.",
             reply_markup=get_main_keyboard()
@@ -561,8 +546,6 @@ async def clear_expenses_confirm(update: Update, context: CallbackContext) -> in
         except Exception as e:
             logger.error(f"Error clearing expenses: {e}")
             success = False
-
-        context.user_data.clear()
 
         if success:
             await update.message.reply_text(
@@ -592,34 +575,40 @@ async def handle_message(update: Update, context: CallbackContext) -> int:
     text = update.message.text
     user_id = update.effective_user.id
 
-    logger.info(f"User {user_id} sent text: {text}")
-    # Используем context для логирования
-    logger.info(f"handle_message context data: {context.user_data}")
+    logger.info(f"User {user_id} sent text: '{text}'")
 
     # Если это команда (начинается с /), пропускаем - команды обрабатываются отдельно
     if text.startswith('/'):
+        logger.info(f"Ignoring command in handle_message: {text}")
         return ConversationHandler.END
 
     # Обрабатываем нажатия на кнопки главного меню
     if text == '➕ Добавить расход':
+        logger.info(f"User {user_id} clicked '➕ Добавить расход'")
         return await add_expense_start(update, context)
 
     elif text == '📊 Статистика':
+        logger.info(f"User {user_id} clicked '📊 Статистика'")
         return await show_stats(update, context)
 
     elif text == '📅 Сегодня':
+        logger.info(f"User {user_id} clicked '📅 Сегодня'")
         return await show_today_expenses(update, context)
 
     elif text == '📈 За месяц':
+        logger.info(f"User {user_id} clicked '📈 За месяц'")
         return await show_month_expenses(update, context)
 
     elif text == '🗑️ Очистить':
+        logger.info(f"User {user_id} clicked '🗑️ Очистить'")
         return await clear_expenses_start(update, context)
 
     elif text == '❓ Помощь':
+        logger.info(f"User {user_id} clicked '❓ Помощь'")
         return await help_command(update, context)
 
     else:
         # Если сообщение не распознано как команда и пользователь не в ConversationHandler
-        # Просто игнорируем или показываем основную клавиатуру
+        logger.info(f"Unknown text in handle_message: '{text}'")
+        # Просто игнорируем, ConversationHandler сам обработает
         return ConversationHandler.END

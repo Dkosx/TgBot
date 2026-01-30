@@ -80,15 +80,24 @@ async def async_create_and_initialize_bot() -> bool:
             ],
             states={
                 AMOUNT: [
-                    MessageHandler(filters.TEXT & ~filters.COMMAND, process_amount),
+                    MessageHandler(
+                        filters.TEXT & ~filters.COMMAND,
+                        process_amount
+                    ),
                     CommandHandler('cancel', cancel)
                 ],
                 CATEGORY: [
-                    MessageHandler(filters.TEXT & ~filters.COMMAND, process_category),
+                    MessageHandler(
+                        filters.TEXT & ~filters.COMMAND,
+                        process_category
+                    ),
                     CommandHandler('cancel', cancel)
                 ],
                 DESCRIPTION: [
-                    MessageHandler(filters.TEXT & ~filters.COMMAND, process_description),
+                    MessageHandler(
+                        filters.TEXT & ~filters.COMMAND,
+                        process_description
+                    ),
                     CommandHandler('skip', skip_description),
                     CommandHandler('cancel', cancel)
                 ]
@@ -98,24 +107,25 @@ async def async_create_and_initialize_bot() -> bool:
                 MessageHandler(filters.Text(['↩️ Назад', 'Отмена']), cancel)
             ],
             name="add_expense",
-            # Убираем persistent=True, так как не настроен persistence для приложения
             persistent=False,
             allow_reentry=True
         )
 
         telegram_app.add_handler(conv_handler)
-        logger.info("✅ ConversationHandler добавлен")
+        logger.info("✅ ConversationHandler для добавления расхода добавлен")
 
         # Отдельный ConversationHandler для очистки
-        # В функции async_create_and_initialize_bot() найти clear_conv_handler и обновить:
         clear_conv_handler = ConversationHandler(
             entry_points=[
                 CommandHandler('clear', clear_expenses_start),
                 MessageHandler(filters.Text(['🗑️ Очистить']), clear_expenses_start)
             ],
             states={
-                CONFIRM_STATE: [  # Используем CONFIRM_STATE вместо 'CONFIRM'
-                    MessageHandler(filters.Text(['✅ Да, удалить все', '❌ Нет, отмена']), clear_expenses_confirm)
+                CONFIRM_STATE: [
+                    MessageHandler(
+                        filters.Text(['✅ Да, удалить все', '❌ Нет, отмена']),
+                        clear_expenses_confirm
+                    )
                 ]
             },
             fallbacks=[
@@ -128,7 +138,7 @@ async def async_create_and_initialize_bot() -> bool:
         )
 
         telegram_app.add_handler(clear_conv_handler)
-        logger.info("✅ Clear ConversationHandler добавлен")
+        logger.info("✅ ConversationHandler для очистки добавлен")
 
         # Базовые обработчики команд (добавляем ПОСЛЕ ConversationHandler)
         telegram_app.add_handler(CommandHandler("start", start_command))
@@ -140,11 +150,12 @@ async def async_create_and_initialize_bot() -> bool:
         logger.info("✅ Базовые обработчики команд добавлены")
 
         # Обработчик текстовых сообщений для кнопок - добавляем ПОСЛЕДНИМ
+        # Это критически важно: handle_message должен быть ПОСЛЕ ConversationHandler
         telegram_app.add_handler(MessageHandler(
             filters.TEXT & ~filters.COMMAND,
             handle_message
         ))
-        logger.info("✅ Обработчик текстовых сообщений добавлен")
+        logger.info("✅ Обработчик текстовых сообщений добавлен (последним)")
 
         # 2. ИНИЦИАЛИЗИРУЕМ приложение
         logger.info("🔄 Инициализируем приложение бота...")
@@ -230,7 +241,6 @@ def webhook_handler():
             logger.error("❌ telegram_app все еще None")
             return 'Bot not initialized', 500
 
-        # Теперь PyCharm знает, что telegram_app не None
         update = Update.de_json(data, telegram_app.bot)
         logger.info(f"📨 Получено обновление: {update.update_id}")
 
@@ -241,7 +251,6 @@ def webhook_handler():
 
     except Exception as webhook_error:
         logger.error(f"❌ Ошибка webhook: {webhook_error}", exc_info=True)
-        # Пробуем переинициализировать при следующем запросе
         telegram_app = None
         return 'Internal error', 500
 
@@ -263,7 +272,6 @@ def set_webhook_handler():
             <body style="font-family: Arial; padding: 20px;">
                 <h1>❌ Telegram бот не инициализирован</h1>
                 <p>Проверьте TELEGRAM_BOT_TOKEN в переменных окружения</p>
-                <p>Токен установлен: Да</p>
                 <p>Попробуйте перезапустить приложение</p>
             </body>
             </html>
@@ -272,18 +280,6 @@ def set_webhook_handler():
     try:
         webhook_url = f"https://{request.host}/webhook"
         logger.info(f"🔗 Устанавливаем webhook на URL: {webhook_url}")
-
-        # Гарантируем, что telegram_app не None после проверки выше
-        if telegram_app is None:
-            return """
-            <!DOCTYPE html>
-            <html>
-            <head><title>Ошибка</title></head>
-            <body style="font-family: Arial; padding: 20px;">
-                <h1>❌ Telegram бот не доступен</h1>
-            </body>
-            </html>
-            """, 500
 
         result = run_async_safe(
             telegram_app.bot.set_webhook(
@@ -340,12 +336,8 @@ def get_webhook_info_handler():
         """, 500
 
     try:
-        # Гарантируем, что telegram_app не None после проверки выше
-        if telegram_app is None:
-            info_json = "Бот не доступен"
-        else:
-            info = run_async_safe(telegram_app.bot.get_webhook_info())
-            info_json = json.dumps(info.to_dict(), indent=2, ensure_ascii=False)
+        info = run_async_safe(telegram_app.bot.get_webhook_info())
+        info_json = json.dumps(info.to_dict(), indent=2, ensure_ascii=False)
 
         return f"""
         <!DOCTYPE html>
@@ -379,7 +371,6 @@ def home_handler():
     """Главная страница"""
     token_status = "✅ УСТАНОВЛЕН" if TELEGRAM_TOKEN and TELEGRAM_TOKEN != "your_bot_token_here" else "❌ ОТСУТСТВУЕТ"
 
-    # Отображаем первую часть токена для отладки
     token_preview = TELEGRAM_TOKEN[
                     :10] + "..." if TELEGRAM_TOKEN and TELEGRAM_TOKEN != "your_bot_token_here" else "Не установлен"
 
@@ -428,7 +419,6 @@ def health_check_handler():
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
 
-    # Выводим информацию о конфигурации при запуске
     print("=" * 50)
     print("🚀 Запуск TgBot сервера")
     print(f"📌 Порт: {port}")
