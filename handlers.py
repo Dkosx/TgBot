@@ -6,8 +6,8 @@ from database_postgres import db
 
 logger = logging.getLogger(__name__)
 
-# Состояния для ConversationHandler - ДОБАВЛЕН CONFIRM_STATE
-AMOUNT, CATEGORY, DESCRIPTION, CONFIRM_STATE = range(4)
+# Состояния для ConversationHandler
+AMOUNT, CATEGORY, DESCRIPTION = range(3)
 
 
 # Базовая клавиатура
@@ -15,7 +15,7 @@ def get_main_keyboard():
     keyboard = [
         ['➕ Добавить расход', '📊 Статистика'],
         ['📅 Сегодня', '📈 За месяц'],
-        ['🗑️ Очистить', '❓ Помощь']
+        ['🗑️ Очистить', '❓ Помощь', '📋 Категории']
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
@@ -81,12 +81,26 @@ async def help_command(update: Update, _context: CallbackContext) -> int:
     • 📅 Сегодня - расходы за сегодня
     • 📈 За месяц - расходы за текущий месяц
     • 🗑️ Очистить - удалить все расходы
+    • 📋 Категории - показать все доступные категории
 
     💡 **Совет:** Используйте кнопки внизу для быстрого доступа!
     """
 
     await update.message.reply_text(
         help_text,
+        reply_markup=get_main_keyboard(),
+        parse_mode='Markdown'
+    )
+    return ConversationHandler.END
+
+
+async def show_categories(update: Update, _context: CallbackContext) -> int:
+    """Показать все категории"""
+    categories_text = "📋 **Доступные категории расходов:**\n\n"
+    categories_text += "\n".join([f"• {cat}" for cat in CATEGORIES])
+
+    await update.message.reply_text(
+        categories_text,
         reply_markup=get_main_keyboard(),
         parse_mode='Markdown'
     )
@@ -113,6 +127,10 @@ async def add_expense_start(update: Update, context: CallbackContext) -> int:
 async def process_amount(update: Update, context: CallbackContext) -> int:
     """Обработка суммы"""
     text = update.message.text.strip()
+
+    # Проверяем, не является ли это командой/кнопкой
+    if text in ['↩️ Назад', '/cancel', 'Отмена']:
+        return await cancel(update, context)
 
     try:
         amount = float(text.replace(',', '.'))
@@ -143,10 +161,10 @@ async def process_amount(update: Update, context: CallbackContext) -> int:
 
 async def process_category(update: Update, context: CallbackContext) -> int:
     """Обработка выбора категории"""
-    category = update.message.text.strip()
+    text = update.message.text.strip()
 
     # Проверка на отмену
-    if category == '↩️ Назад':
+    if text == '↩️ Назад':
         context.user_data.clear()
         await update.message.reply_text(
             "🚫 Добавление расхода отменено.",
@@ -155,7 +173,7 @@ async def process_category(update: Update, context: CallbackContext) -> int:
         return ConversationHandler.END
 
     # Проверка на валидную категорию
-    if category not in CATEGORIES:
+    if text not in CATEGORIES:
         await update.message.reply_text(
             "❌ Пожалуйста, выберите категорию из списка:",
             reply_markup=get_categories_keyboard()
@@ -163,10 +181,10 @@ async def process_category(update: Update, context: CallbackContext) -> int:
         return CATEGORY
 
     # Сохраняем категорию
-    context.user_data['category'] = category
+    context.user_data['category'] = text
 
     await update.message.reply_text(
-        f"✅ Категория: {category}\n\n"
+        f"✅ Категория: {text}\n\n"
         "📝 **Введите описание (необязательно):**\n"
         "Или напишите /skip чтобы пропустить",
         reply_markup=ReplyKeyboardRemove(),
@@ -177,12 +195,12 @@ async def process_category(update: Update, context: CallbackContext) -> int:
 
 async def process_description(update: Update, context: CallbackContext) -> int:
     """Обработка описания"""
-    description = update.message.text.strip()
+    text = update.message.text.strip()  # Переименовал description в text
     user_id = update.effective_user.id
 
     # Пропуск описания
-    if description == '/skip':
-        description = None
+    if text == '/skip':
+        text = None
 
     # Получаем сохраненные данные
     amount = context.user_data.get('amount')
@@ -200,7 +218,7 @@ async def process_description(update: Update, context: CallbackContext) -> int:
         user_id=user_id,
         amount=amount,
         category=category,
-        description=description
+        description=text  # Использую text вместо description
     )
 
     if success:
@@ -209,8 +227,8 @@ async def process_description(update: Update, context: CallbackContext) -> int:
             f"💰 Сумма: {amount:.2f} руб.\n"
             f"📂 Категория: {category}\n"
         )
-        if description:
-            response += f"📝 Описание: {description}\n"
+        if text:  # Использую text вместо description
+            response += f"📝 Описание: {text}\n"
     else:
         response = "❌ Ошибка сохранения. Попробуйте позже."
 
@@ -223,11 +241,6 @@ async def process_description(update: Update, context: CallbackContext) -> int:
         parse_mode='Markdown'
     )
     return ConversationHandler.END
-
-
-async def skip_description(update: Update, context: CallbackContext) -> int:
-    """Пропуск описания"""
-    return await process_description(update, context)
 
 
 async def cancel(update: Update, context: CallbackContext) -> int:
@@ -368,7 +381,7 @@ async def clear_expenses_start(update: Update, context: CallbackContext) -> int:
 
     # Устанавливаем флаг в контексте
     context.user_data['clearing'] = True
-    return CONFIRM_STATE
+    return ConversationHandler.END  # Простое решение
 
 
 async def handle_clear_confirmation(update: Update, context: CallbackContext) -> int:
@@ -403,29 +416,11 @@ async def handle_clear_confirmation(update: Update, context: CallbackContext) ->
     return ConversationHandler.END
 
 
-async def clear_expenses_confirm(update: Update, context: CallbackContext) -> int:
-    """Алиас для handle_clear_confirmation"""
-    return await handle_clear_confirmation(update, context)
-
-
-async def show_categories(update: Update, _context: CallbackContext) -> int:
-    """Показать категории"""
-    categories_text = "📋 **Доступные категории:**\n\n" + "\n".join(
-        [f"• {cat}" for cat in CATEGORIES]
-    )
-
-    await update.message.reply_text(
-        categories_text,
-        reply_markup=get_main_keyboard(),
-        parse_mode='Markdown'
-    )
-    return ConversationHandler.END
-
-
 # ========== УПРОЩЕННЫЙ ОБРАБОТЧИК КНОПОК ==========
 async def handle_message(update: Update, context: CallbackContext) -> int:
     """Обработка текстовых сообщений и кнопок"""
     text = update.message.text
+    logger.info(f"Handle message: {text}")
 
     # Обработка подтверждения очистки
     if text in ['✅ Да, удалить все', '❌ Нет, отмена']:
@@ -444,6 +439,12 @@ async def handle_message(update: Update, context: CallbackContext) -> int:
         return await clear_expenses_start(update, context)
     elif text == '❓ Помощь':
         return await help_command(update, context)
+    elif text == '📋 Категории':
+        return await show_categories(update, context)
 
-    # Если не распознано - игнорируем
+    # Если не распознано - покажем подсказку
+    await update.message.reply_text(
+        "🤔 Используйте кнопки меню для работы с ботом.",
+        reply_markup=get_main_keyboard()
+    )
     return ConversationHandler.END

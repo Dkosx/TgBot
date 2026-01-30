@@ -16,7 +16,8 @@ from handlers import (
     add_expense_start, process_amount, process_category, process_description,
     cancel,
     show_stats, show_today_expenses, show_month_expenses,
-    clear_expenses_start, handle_clear_confirmation, handle_message
+    clear_expenses_start, handle_clear_confirmation, handle_message,
+    show_categories  # ДОБАВЛЕНА ЗАПЯТАЯ на предыдущей строке
 )
 
 # Импортируем базу данных из database_postgres.py
@@ -129,6 +130,7 @@ async def async_create_and_initialize_bot() -> bool:
         telegram_app.add_handler(CommandHandler("stats", show_stats))
         telegram_app.add_handler(CommandHandler("today", show_today_expenses))
         telegram_app.add_handler(CommandHandler("month", show_month_expenses))
+        telegram_app.add_handler(CommandHandler("categories", show_categories))
 
         # Обработчик текстовых сообщений для кнопок - добавляем ПОСЛЕДНИМ
         telegram_app.add_handler(MessageHandler(
