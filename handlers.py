@@ -1,5 +1,5 @@
 import logging
-from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
+from telegram import Update
 from telegram.ext import CallbackContext, ConversationHandler
 from config import CATEGORIES
 from database_postgres import db
@@ -8,27 +8,6 @@ logger = logging.getLogger(__name__)
 
 # Состояния для ConversationHandler
 AMOUNT, CATEGORY, DESCRIPTION = range(3)
-
-
-# Базовая клавиатура
-def get_main_keyboard():
-    keyboard = [
-        ['➕ Добавить расход', '📊 Статистика'],
-        ['📅 Сегодня', '📈 За месяц'],
-        ['🗑️ Очистить', '❓ Помощь', '📋 Категории']
-    ]
-    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-
-
-# Клавиатура для выбора категории
-def get_categories_keyboard():
-    categories = CATEGORIES
-    keyboard = []
-    for i in range(0, len(categories), 2):
-        row = categories[i:i + 2]
-        keyboard.append(row)
-    keyboard.append(['↩️ Назад'])
-    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 
 # ========== БАЗОВЫЕ КОМАНДЫ ==========
@@ -54,12 +33,20 @@ async def start_command(update: Update, context: CallbackContext) -> int:
 
     🤖 Я бот для учёта расходов.
 
-    📌 Используйте кнопки ниже для управления расходами.
+    📌 **Доступные команды:**
+    /add - Добавить расход
+    /today - Расходы за сегодня
+    /month - Расходы за месяц
+    /stats - Статистика по категориям
+    /categories - Список категорий
+    /clear - Очистить все расходы
+    /help - Помощь
+
+    💡 **Совет:** Используйте меню команд для удобства!
     """
 
     await update.message.reply_text(
         welcome_text,
-        reply_markup=get_main_keyboard(),
         parse_mode='Markdown'
     )
     return ConversationHandler.END
@@ -68,48 +55,48 @@ async def start_command(update: Update, context: CallbackContext) -> int:
 async def help_command(update: Update, _context: CallbackContext) -> int:
     """Команда помощи /help"""
     help_text = """
-    📚 **Справка:**
+    📚 **Справка по командам:**
 
-    **Как добавить расход:**
-    1. Нажмите "➕ Добавить расход"
+    **Основные команды:**
+    /add - Добавить новый расход
+    /today - Показать расходы за сегодня
+    /month - Показать расходы за текущий месяц
+    /stats - Статистика по категориям
+    /categories - Показать все категории расходов
+    /clear - Удалить все расходы (с подтверждением)
+
+    **Процесс добавления расхода:**
+    1. Напишите `/add`
     2. Введите сумму (например: 1500 или 1500.50)
     3. Выберите категорию из списка
-    4. Добавьте описание (необязательно)
+    4. Добавьте описание (необязательно, /skip для пропуска)
 
-    **Другие функции:**
-    • 📊 Статистика - статистика по категориям
-    • 📅 Сегодня - расходы за сегодня
-    • 📈 За месяц - расходы за текущий месяц
-    • 🗑️ Очистить - удалить все расходы
-    • 📋 Категории - показать все доступные категории
-
-    💡 **Совет:** Используйте кнопки внизу для быстрого доступа!
+    💡 **Все команды доступны в меню бота!**
     """
 
     await update.message.reply_text(
         help_text,
-        reply_markup=get_main_keyboard(),
         parse_mode='Markdown'
     )
     return ConversationHandler.END
 
 
 async def show_categories(update: Update, _context: CallbackContext) -> int:
-    """Показать все категории"""
+    """Показать все категории - команда /categories"""
     categories_text = "📋 **Доступные категории расходов:**\n\n"
     categories_text += "\n".join([f"• {cat}" for cat in CATEGORIES])
+    categories_text += "\n\n💡 Используйте эти категории при добавлении расходов."
 
     await update.message.reply_text(
         categories_text,
-        reply_markup=get_main_keyboard(),
         parse_mode='Markdown'
     )
     return ConversationHandler.END
 
 
-# ========== ПРОСТОЙ ДИАЛОГ ДОБАВЛЕНИЯ РАСХОДА ==========
+# ========== ДИАЛОГ ДОБАВЛЕНИЯ РАСХОДА ==========
 async def add_expense_start(update: Update, context: CallbackContext) -> int:
-    """Начало добавления расхода"""
+    """Начало добавления расхода - команда /add"""
     logger.info(f"User {update.effective_user.id} starting to add expense")
 
     # Очищаем данные предыдущего диалога
@@ -117,8 +104,8 @@ async def add_expense_start(update: Update, context: CallbackContext) -> int:
 
     await update.message.reply_text(
         "💸 **Введите сумму расхода:**\n"
-        "Например: 1500 или 1500.50",
-        reply_markup=ReplyKeyboardRemove(),
+        "Например: 1500 или 1500.50\n\n"
+        "Для отмены напишите /cancel",
         parse_mode='Markdown'
     )
     return AMOUNT
@@ -128,33 +115,41 @@ async def process_amount(update: Update, context: CallbackContext) -> int:
     """Обработка суммы"""
     text = update.message.text.strip()
 
-    # Проверяем, не является ли это командой/кнопкой
-    if text in ['↩️ Назад', '/cancel', 'Отмена']:
-        return await cancel(update, context)
-
     try:
         amount = float(text.replace(',', '.'))
 
         if amount <= 0:
             await update.message.reply_text(
-                "❌ Сумма должна быть больше 0. Введите сумму еще раз:"
+                "❌ Сумма должна быть больше 0. Введите сумму еще раз:\n"
+                "Для отмены напишите /cancel"
+            )
+            return AMOUNT
+
+        if amount > 1000000000:  # 1 миллиард
+            await update.message.reply_text(
+                "❌ Сумма слишком большая. Проверьте правильность ввода.\n"
+                "Для отмены напишите /cancel"
             )
             return AMOUNT
 
         # Сохраняем сумму
         context.user_data['amount'] = amount
 
+        # Показываем категории в виде простого списка
+        categories_text = "📋 **Выберите категорию:**\n\n"
+        categories_text += "\n".join([f"• {cat}" for cat in CATEGORIES])
+        categories_text += "\n\n✏️ **Напишите название категории из списка выше**\nДля отмены напишите /cancel"
+
         await update.message.reply_text(
-            f"✅ Сумма: {amount:.2f} руб.\n\n"
-            "📋 **Выберите категорию:**",
-            reply_markup=get_categories_keyboard(),
+            f"✅ Сумма: {amount:.2f} руб.\n\n{categories_text}",
             parse_mode='Markdown'
         )
         return CATEGORY
 
     except ValueError:
         await update.message.reply_text(
-            "❌ Неверный формат. Введите число, например: 1500 или 1500.50"
+            "❌ Неверный формат. Введите число, например: 1500 или 1500.50\n"
+            "Для отмены напишите /cancel"
         )
         return AMOUNT
 
@@ -163,20 +158,12 @@ async def process_category(update: Update, context: CallbackContext) -> int:
     """Обработка выбора категории"""
     text = update.message.text.strip()
 
-    # Проверка на отмену
-    if text == '↩️ Назад':
-        context.user_data.clear()
-        await update.message.reply_text(
-            "🚫 Добавление расхода отменено.",
-            reply_markup=get_main_keyboard()
-        )
-        return ConversationHandler.END
-
     # Проверка на валидную категорию
     if text not in CATEGORIES:
         await update.message.reply_text(
-            "❌ Пожалуйста, выберите категорию из списка:",
-            reply_markup=get_categories_keyboard()
+            "❌ Пожалуйста, введите название категории из списка:\n\n" +
+            "\n".join([f"• {cat}" for cat in CATEGORIES]) +
+            "\n\nДля отмены напишите /cancel"
         )
         return CATEGORY
 
@@ -186,8 +173,8 @@ async def process_category(update: Update, context: CallbackContext) -> int:
     await update.message.reply_text(
         f"✅ Категория: {text}\n\n"
         "📝 **Введите описание (необязательно):**\n"
-        "Или напишите /skip чтобы пропустить",
-        reply_markup=ReplyKeyboardRemove(),
+        "Напишите описание или /skip чтобы пропустить\n"
+        "Для отмены напишите /cancel",
         parse_mode='Markdown'
     )
     return DESCRIPTION
@@ -195,7 +182,7 @@ async def process_category(update: Update, context: CallbackContext) -> int:
 
 async def process_description(update: Update, context: CallbackContext) -> int:
     """Обработка описания"""
-    text = update.message.text.strip()  # Переименовал description в text
+    text = update.message.text.strip()
     user_id = update.effective_user.id
 
     # Пропуск описания
@@ -208,9 +195,9 @@ async def process_description(update: Update, context: CallbackContext) -> int:
 
     if not amount or not category:
         await update.message.reply_text(
-            "❌ Ошибка: данные потеряны. Начните заново.",
-            reply_markup=get_main_keyboard()
+            "❌ Ошибка: данные потеряны. Начните заново командой /add",
         )
+        context.user_data.clear()
         return ConversationHandler.END
 
     # Сохраняем в БД
@@ -218,7 +205,7 @@ async def process_description(update: Update, context: CallbackContext) -> int:
         user_id=user_id,
         amount=amount,
         category=category,
-        description=text  # Использую text вместо description
+        description=text
     )
 
     if success:
@@ -227,8 +214,10 @@ async def process_description(update: Update, context: CallbackContext) -> int:
             f"💰 Сумма: {amount:.2f} руб.\n"
             f"📂 Категория: {category}\n"
         )
-        if text:  # Использую text вместо description
+        if text:
             response += f"📝 Описание: {text}\n"
+
+        response += "\n💡 Используйте другие команды для управления расходами."
     else:
         response = "❌ Ошибка сохранения. Попробуйте позже."
 
@@ -237,33 +226,31 @@ async def process_description(update: Update, context: CallbackContext) -> int:
 
     await update.message.reply_text(
         response,
-        reply_markup=get_main_keyboard(),
         parse_mode='Markdown'
     )
     return ConversationHandler.END
 
 
 async def cancel(update: Update, context: CallbackContext) -> int:
-    """Отмена диалога"""
+    """Отмена диалога - команда /cancel"""
     context.user_data.clear()
     await update.message.reply_text(
-        "🚫 Операция отменена.",
-        reply_markup=get_main_keyboard()
+        "🚫 Операция отменена.\n"
+        "Используйте /help для просмотра доступных команд."
     )
     return ConversationHandler.END
 
 
 # ========== КОМАНДЫ ПРОСМОТРА ==========
 async def show_today_expenses(update: Update, _context: CallbackContext) -> int:
-    """Расходы за сегодня"""
+    """Расходы за сегодня - команда /today"""
     user_id = update.effective_user.id
     expenses = db.get_today_expenses(user_id)
 
     if not expenses:
         await update.message.reply_text(
             "📅 **Сегодня еще нет расходов.**\n"
-            "Добавьте первый расход с помощью ➕ Добавить расход",
-            reply_markup=get_main_keyboard(),
+            "Добавьте первый расход командой /add",
             parse_mode='Markdown'
         )
         return ConversationHandler.END
@@ -283,22 +270,20 @@ async def show_today_expenses(update: Update, _context: CallbackContext) -> int:
 
     await update.message.reply_text(
         message,
-        reply_markup=get_main_keyboard(),
         parse_mode='Markdown'
     )
     return ConversationHandler.END
 
 
 async def show_month_expenses(update: Update, _context: CallbackContext) -> int:
-    """Расходы за месяц"""
+    """Расходы за месяц - команда /month"""
     user_id = update.effective_user.id
     expenses = db.get_month_expenses(user_id)
 
     if not expenses:
         await update.message.reply_text(
             "📈 **В этом месяце еще нет расходов.**\n"
-            "Добавьте первый расход с помощью ➕ Добавить расход",
-            reply_markup=get_main_keyboard(),
+            "Добавьте первый расход командой /add",
             parse_mode='Markdown'
         )
         return ConversationHandler.END
@@ -318,14 +303,13 @@ async def show_month_expenses(update: Update, _context: CallbackContext) -> int:
 
     await update.message.reply_text(
         message,
-        reply_markup=get_main_keyboard(),
         parse_mode='Markdown'
     )
     return ConversationHandler.END
 
 
 async def show_stats(update: Update, _context: CallbackContext) -> int:
-    """Статистика"""
+    """Статистика - команда /stats"""
     user_id = update.effective_user.id
     stats = db.get_expenses_by_category(user_id)
     total = db.get_total_expenses(user_id)
@@ -333,8 +317,7 @@ async def show_stats(update: Update, _context: CallbackContext) -> int:
     if not stats:
         await update.message.reply_text(
             "📊 **Еще нет статистики.**\n"
-            "Добавьте расходы для просмотра статистики.",
-            reply_markup=get_main_keyboard(),
+            "Добавьте расходы командой /add для просмотра статистики.",
             parse_mode='Markdown'
         )
         return ConversationHandler.END
@@ -349,65 +332,59 @@ async def show_stats(update: Update, _context: CallbackContext) -> int:
 
     await update.message.reply_text(
         message,
-        reply_markup=get_main_keyboard(),
         parse_mode='Markdown'
     )
     return ConversationHandler.END
 
 
 async def clear_expenses_start(update: Update, context: CallbackContext) -> int:
-    """Начало очистки"""
+    """Начало очистки - команда /clear"""
     user_id = update.effective_user.id
     total = db.get_total_expenses(user_id)
 
     if total == 0:
         await update.message.reply_text(
             "🗑️ **Нет расходов для очистки.**",
-            reply_markup=get_main_keyboard(),
             parse_mode='Markdown'
         )
         return ConversationHandler.END
 
-    # Создаем простую клавиатуру подтверждения
-    keyboard = [['✅ Да, удалить все', '❌ Нет, отмена']]
-
     await update.message.reply_text(
         f"⚠️ **Удалить ВСЕ расходы?**\n\n"
         f"Всего на сумму: {total:.2f} руб.\n\n"
-        f"❌ **Действие необратимо!**",
-        reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True),
+        f"❌ **Действие необратимо!**\n\n"
+        f"Напишите **ДА** для подтверждения или /cancel для отмены.",
         parse_mode='Markdown'
     )
 
     # Устанавливаем флаг в контексте
     context.user_data['clearing'] = True
-    return ConversationHandler.END  # Простое решение
+    return ConversationHandler.END
 
 
 async def handle_clear_confirmation(update: Update, context: CallbackContext) -> int:
     """Обработка подтверждения очистки"""
-    text = update.message.text.strip()
-    user_id = update.effective_user.id
+    text = update.message.text.strip().upper()
 
-    if text == '❌ Нет, отмена':
-        await update.message.reply_text(
-            "✅ Очистка отменена.",
-            reply_markup=get_main_keyboard()
-        )
-    elif text == '✅ Да, удалить все':
+    if text == 'ДА':
+        user_id = update.effective_user.id
         success = db.clear_user_expenses(user_id)
 
         if success:
             await update.message.reply_text(
-                "✅ **Все расходы удалены!**",
-                reply_markup=get_main_keyboard(),
+                "✅ **Все расходы удалены!**\n"
+                "Используйте /add для добавления новых расходов.",
                 parse_mode='Markdown'
             )
         else:
             await update.message.reply_text(
                 "❌ Ошибка удаления расходов.",
-                reply_markup=get_main_keyboard()
             )
+    else:
+        await update.message.reply_text(
+            "✅ Очистка отменена.\n"
+            "Данные сохранены.",
+        )
 
     # Очищаем флаг
     if 'clearing' in context.user_data:
@@ -416,35 +393,32 @@ async def handle_clear_confirmation(update: Update, context: CallbackContext) ->
     return ConversationHandler.END
 
 
-# ========== УПРОЩЕННЫЙ ОБРАБОТЧИК КНОПОК ==========
+# ========== ПРОСТОЙ ОБРАБОТЧИК ТЕКСТОВЫХ СООБЩЕНИЙ ==========
 async def handle_message(update: Update, context: CallbackContext) -> int:
-    """Обработка текстовых сообщений и кнопок"""
-    text = update.message.text
-    logger.info(f"Handle message: {text}")
+    """Обработка текстовых сообщений (для очистки и случайных сообщений)"""
+    text = update.message.text.strip().upper()
 
     # Обработка подтверждения очистки
-    if text in ['✅ Да, удалить все', '❌ Нет, отмена']:
+    if context.user_data.get('clearing') and text == 'ДА':
         return await handle_clear_confirmation(update, context)
 
-    # Обработка основных кнопок
-    if text == '➕ Добавить расход':
-        return await add_expense_start(update, context)
-    elif text == '📊 Статистика':
-        return await show_stats(update, context)
-    elif text == '📅 Сегодня':
-        return await show_today_expenses(update, context)
-    elif text == '📈 За месяц':
-        return await show_month_expenses(update, context)
-    elif text == '🗑️ Очистить':
-        return await clear_expenses_start(update, context)
-    elif text == '❓ Помощь':
-        return await help_command(update, context)
-    elif text == '📋 Категории':
-        return await show_categories(update, context)
+    # Если начат процесс очистки, но введено не "ДА"
+    if context.user_data.get('clearing'):
+        await update.message.reply_text(
+            "⚠️ Напишите **ДА** для подтверждения очистки или /cancel для отмены."
+        )
+        return ConversationHandler.END
 
-    # Если не распознано - покажем подсказку
+    # Для всех других сообщений - показываем подсказку
     await update.message.reply_text(
-        "🤔 Используйте кнопки меню для работы с ботом.",
-        reply_markup=get_main_keyboard()
+        "🤖 Используйте команды для работы с ботом:\n"
+        "/start - Запустить бота\n"
+        "/help - Помощь по командам\n"
+        "/add - Добавить расход\n"
+        "/today - Расходы за сегодня\n"
+        "/month - Расходы за месяц\n"
+        "/stats - Статистика\n"
+        "/categories - Список категорий\n"
+        "/clear - Очистить расходы"
     )
     return ConversationHandler.END

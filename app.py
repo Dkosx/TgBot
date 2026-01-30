@@ -9,15 +9,15 @@ from telegram import Update, BotCommand
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ConversationHandler
 from config import COMMANDS
 
-# Импортируем обработчики из handlers.py - ТОЛЬКО ТО, ЧТО ФАКТИЧЕСКИ ИСПОЛЬЗУЕМ
+# Импортируем обработчики из handlers.py
 from handlers import (
     AMOUNT, CATEGORY, DESCRIPTION,
     start_command, help_command,
     add_expense_start, process_amount, process_category, process_description,
     cancel,
     show_stats, show_today_expenses, show_month_expenses,
-    clear_expenses_start, handle_clear_confirmation, handle_message,
-    show_categories  # ДОБАВЛЕНА ЗАПЯТАЯ на предыдущей строке
+    clear_expenses_start, handle_message,
+    show_categories
 )
 
 # Импортируем базу данных из database_postgres.py
@@ -50,6 +50,9 @@ def run_async_safe(coro):
 
     try:
         return loop.run_until_complete(coro)
+    except Exception as e:
+        logger.error(f"Ошибка в асинхронной функции: {e}")
+        return None
     finally:
         pass
 
@@ -70,14 +73,10 @@ async def async_create_and_initialize_bot() -> bool:
         logger.info("✅ Приложение бота создано")
 
         # ========== НАСТРОЙКА ОБРАБОТЧИКОВ ==========
-        # ВАЖНО: Порядок добавления обработчиков имеет значение!
 
-        # ConversationHandler для добавления расхода (добавляем ПЕРВЫМ)
+        # ConversationHandler для добавления расхода
         conv_handler = ConversationHandler(
-            entry_points=[
-                CommandHandler('add', add_expense_start),
-                MessageHandler(filters.Text(['➕ Добавить расход']), add_expense_start)
-            ],
+            entry_points=[CommandHandler('add', add_expense_start)],
             states={
                 AMOUNT: [
                     MessageHandler(filters.TEXT & ~filters.COMMAND, process_amount)
@@ -87,12 +86,11 @@ async def async_create_and_initialize_bot() -> bool:
                 ],
                 DESCRIPTION: [
                     MessageHandler(filters.TEXT & ~filters.COMMAND, process_description),
-                    CommandHandler('skip', process_description)  # Обрабатывает /skip тоже
+                    CommandHandler('skip', process_description)  # Для команды /skip
                 ]
             },
             fallbacks=[
-                CommandHandler('cancel', cancel),
-                MessageHandler(filters.Text(['↩️ Назад']), cancel)
+                CommandHandler('cancel', cancel)
             ],
             name="add_expense",
             persistent=False,
@@ -101,43 +99,20 @@ async def async_create_and_initialize_bot() -> bool:
 
         telegram_app.add_handler(conv_handler)
 
-        # Отдельный ConversationHandler для очистки
-        clear_conv_handler = ConversationHandler(
-            entry_points=[
-                CommandHandler('clear', clear_expenses_start),
-                MessageHandler(filters.Text(['🗑️ Очистить']), clear_expenses_start)
-            ],
-            states={
-                'CONFIRM': [  # Используем строку вместо CONFIRM_STATE
-                    MessageHandler(filters.Text(['✅ Да, удалить все', '❌ Нет, отмена']), handle_clear_confirmation)
-                ]
-            },
-            fallbacks=[
-                CommandHandler('cancel', cancel),
-                MessageHandler(filters.Text(['Отмена']), cancel)
-            ],
-            name="clear_expenses",
-            persistent=False,
-            allow_reentry=True
-        )
-
-        telegram_app.add_handler(clear_conv_handler)
-        logger.info("✅ Clear ConversationHandler добавлен")
-
-        # Базовые обработчики команд (добавляем ПОСЛЕ ConversationHandler)
+        # Базовые обработчики команд
         telegram_app.add_handler(CommandHandler("start", start_command))
         telegram_app.add_handler(CommandHandler("help", help_command))
         telegram_app.add_handler(CommandHandler("stats", show_stats))
         telegram_app.add_handler(CommandHandler("today", show_today_expenses))
         telegram_app.add_handler(CommandHandler("month", show_month_expenses))
         telegram_app.add_handler(CommandHandler("categories", show_categories))
+        telegram_app.add_handler(CommandHandler("clear", clear_expenses_start))
 
-        # Обработчик текстовых сообщений для кнопок - добавляем ПОСЛЕДНИМ
+        # Обработчик текстовых сообщений (для подтверждения очистки и случайных сообщений)
         telegram_app.add_handler(MessageHandler(
             filters.TEXT & ~filters.COMMAND,
             handle_message
         ))
-        logger.info("✅ Обработчик текстовых сообщений добавлен")
 
         # 2. ИНИЦИАЛИЗИРУЕМ приложение
         logger.info("🔄 Инициализируем приложение бота...")
@@ -188,7 +163,8 @@ def initialize_bot_on_startup():
         return False
 
 
-initialize_bot_on_startup()
+# Отложенная инициализация при первом запросе
+# initialize_bot_on_startup()  # Закомментировано, будет вызываться при первом запросе
 
 
 # ========== WEBHOOK МАРШРУТЫ ==========
