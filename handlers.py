@@ -62,7 +62,7 @@ async def show_categories(update: Update, context: CallbackContext) -> int:
 # ========== ДИАЛОГ ДОБАВЛЕНИЯ РАСХОДА ==========
 async def add_expense_start(update: Update, context: CallbackContext) -> int:
     """Начало добавления расхода"""
-    logger.info(f"Начало добавления расхода для пользователя {update.effective_user.id}")
+    logger.info(f"Пользователь {update.effective_user.id} начал добавление расхода")
     context.user_data.clear()
 
     await update.message.reply_text(
@@ -86,13 +86,12 @@ async def process_amount(update: Update, context: CallbackContext) -> int:
         context.user_data['amount'] = amount
         logger.info(f"Сумма сохранена: {amount}")
 
-        # Показываем категории
-        categories_text = "📋 **Выберите категорию:**\n\n"
-        categories_text += "\n".join([f"• {cat}" for cat in CATEGORIES])
-        categories_text += "\n\n✏️ **Введите название категории из списка выше**"
+        categories = "\n".join([f"• {cat}" for cat in CATEGORIES])
 
         await update.message.reply_text(
-            f"✅ Сумма: {amount:.2f} руб.\n\n{categories_text}",
+            f"✅ Сумма: {amount:.2f} руб.\n\n"
+            f"📋 **Выберите категорию:**\n\n{categories}\n\n"
+            "✏️ **Введите название категории из списка выше**",
             parse_mode='Markdown'
         )
         return CATEGORY
@@ -106,10 +105,6 @@ async def process_category(update: Update, context: CallbackContext) -> int:
     """Обработка выбора категории"""
     text = update.message.text.strip()
     logger.info(f"Получена категория: '{text}'")
-
-    # Проверяем, что это не команда
-    if text.startswith('/'):
-        return CATEGORY
 
     if text in CATEGORIES:
         context.user_data['category'] = text
@@ -138,11 +133,9 @@ async def process_description(update: Update, context: CallbackContext) -> int:
     text = update.message.text.strip()
     user_id = update.effective_user.id
 
-    # Пропуск описания
     if text == '/skip':
         text = None
 
-    # Получаем сохраненные данные
     amount = context.user_data.get('amount')
     category = context.user_data.get('category')
 
@@ -151,7 +144,6 @@ async def process_description(update: Update, context: CallbackContext) -> int:
         context.user_data.clear()
         return ConversationHandler.END
 
-    # Сохраняем в БД
     success = db.add_expense(user_id, amount, category, text)
 
     if success:
@@ -281,10 +273,12 @@ async def handle_clear_confirmation(update: Update, context: CallbackContext) ->
     user_id = update.effective_user.id
 
     if text == 'ДА':
+        # Получаем сумму перед удалением для отображения
+        total = db.get_total_expenses(user_id)
         success = db.clear_user_expenses(user_id)
 
         if success:
-            await update.message.reply_text("✅ **Все расходы удалены!**")
+            await update.message.reply_text(f"✅ **Все расходы ({total:.2f} руб.) удалены!**")
         else:
             await update.message.reply_text("❌ Ошибка удаления.")
     else:
@@ -297,21 +291,33 @@ async def handle_clear_confirmation(update: Update, context: CallbackContext) ->
 
 
 async def handle_message(update: Update, context: CallbackContext) -> int:
-    """Обработка случайных сообщений"""
-    text = update.message.text.strip().upper()
+    """УМНЫЙ обработчик сообщений - проверяет контекст"""
+    text = update.message.text.strip()
+    logger.info(f"handle_message: '{text}' от пользователя {update.effective_user.id}")
 
-    # Обработка подтверждения очистки
-    if context.user_data.get('clearing') and text == 'ДА':
-        return await handle_clear_confirmation(update, context)
-
-    # Если начата очистка, но введено не "ДА"
+    # 1. Проверяем, идет ли процесс очистки
     if context.user_data.get('clearing'):
-        await update.message.reply_text(
-            "⚠️ Напишите **ДА** для подтверждения или /cancel для отмены."
-        )
-        return ConversationHandler.END
+        if text.upper() == 'ДА':
+            user_id = update.effective_user.id
+            # Получаем сумму перед удалением для отображения
+            total = db.get_total_expenses(user_id)
+            success = db.clear_user_expenses(user_id)
 
-    # Для всех других сообщений
+            if success:
+                await update.message.reply_text(f"✅ **Все расходы ({total:.2f} руб.) удалены!**")
+            else:
+                await update.message.reply_text("❌ Ошибка удаления.")
+
+            if 'clearing' in context.user_data:
+                del context.user_data['clearing']
+            return ConversationHandler.END
+        else:
+            await update.message.reply_text(
+                "⚠️ Напишите **ДА** для подтверждения или /cancel для отмены."
+            )
+            return ConversationHandler.END
+
+    # 2. Если это не очистка, показываем подсказку
     await update.message.reply_text(
         "🤖 Используйте команды:\n"
         "/add - Добавить расход\n"
